@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <title>Lulu-Snake</title>
+    <link rel="stylesheet" href="styles.css?v=16" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div class="title">
+          <h1>Lulu-Snake</h1>
+          <p>Use arrow keys or WASD. Space to pause, R to restart.</p>
+        </div>
+        <div id="rage-indicator" class="rage-indicator" hidden>
+          <strong>LULU-RAGE x2</strong>
+          <span id="rage-timer">15.0s</span>
+        </div>
+        <button id="audio-toggle" class="audio-toggle" type="button">Audio On</button>
+        <div class="scoreboard">
+          <span>Score</span>
+          <strong id="score">0</strong>
+        </div>
+      </header>
+
+      <section class="stage">
+        <canvas id="game" width="920" height="920" aria-label="Snake game board"></canvas>
+        <div id="rage-popup" class="rage-popup" hidden>
+          <div class="rage-card">
+            <h2>Lulu-Rage</h2>
+            <img src="./assets/snake-head.png" alt="Lulu face" />
+          </div>
+        </div>
+        <div id="overlay" class="overlay" role="status" aria-live="polite">
+          <div class="menu-card">
+            <h2 id="menu-title">Lulu-Snake</h2>
+            <p id="menu-text">Press Start to begin.</p>
+            <div id="difficulty-options" class="difficulty-options" hidden>
+              <button class="difficulty-btn" data-difficulty="easy">Easy</button>
+              <button class="difficulty-btn active" data-difficulty="medium">Medium</button>
+              <button class="difficulty-btn" data-difficulty="hard">Hard</button>
+            </div>
+            <p id="difficulty-current" class="difficulty-current" hidden>Selected: Easy</p>
+            <div class="menu-scores">
+              <h3 id="top5-title">Top 5</h3>
+              <ol id="menu-highscore-list" class="menu-highscore-list"></ol>
+            </div>
+            <div id="name-entry" class="name-entry" hidden>
+              <label for="name-entry-input">Top 5 reached. Enter your name:</label>
+              <input id="name-entry-input" type="text" maxlength="16" placeholder="Player" />
+              <button id="save-score">Save Score</button>
+            </div>
+            <button id="start-game">Start Game</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="controls" aria-label="On-screen controls">
+        <div class="dpad">
+          <button data-dir="up">Up</button>
+          <div class="dpad-row">
+            <button data-dir="left">Left</button>
+            <button data-dir="down">Down</button>
+            <button data-dir="right">Right</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="pause">Pause</button>
+          <button id="restart">Restart</button>
+        </div>
+      </section>
+
+    </main>
+
+    <script type="module" src="app.js?v=33"></script>
+  </body>
+</html>
