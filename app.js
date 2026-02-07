@@ -64,6 +64,8 @@ let audioUnlocked = false;
 let bgWasDucked = false;
 let rageMusicActive = false;
 let audioMuted = localStorage.getItem(AUDIO_MUTED_KEY) === "1";
+let rageAudioPrimed = false;
+let ragePlayPending = false;
 let treatsSinceRage = 0;
 let bgFadeRaf = null;
 let rageFadeRaf = null;
@@ -74,12 +76,46 @@ let swipeLastY = 0;
 const bgMusic = new Audio("./assets/bg-music.mp3");
 bgMusic.loop = true;
 bgMusic.volume = BG_MUSIC_VOLUME;
+bgMusic.playsInline = true;
 
 const rageMusic = new Audio("./assets/lulu-rage.mp3");
 rageMusic.loop = false;
 rageMusic.volume = RAGE_MUSIC_VOLUME;
+rageMusic.playsInline = true;
 bgMusic.muted = audioMuted;
 rageMusic.muted = audioMuted;
+
+function playRageTrack() {
+  if (audioMuted) return;
+  rageMusic.play().then(() => {
+    ragePlayPending = false;
+  }).catch(() => {
+    ragePlayPending = true;
+  });
+}
+
+function primeRageTrackIfNeeded() {
+  if (audioMuted || rageAudioPrimed) return;
+  const wasMuted = rageMusic.muted;
+  const previousVolume = rageMusic.volume;
+  rageMusic.pause();
+  rageMusic.currentTime = 0;
+  rageMusic.muted = true;
+  rageMusic.volume = 0;
+  rageMusic.play().then(() => {
+    rageMusic.pause();
+    rageMusic.currentTime = 0;
+    rageMusic.muted = wasMuted;
+    rageMusic.volume = previousVolume;
+    rageAudioPrimed = true;
+    if (ragePlayPending && isRageMode() && !audioMuted) {
+      playRageTrack();
+    }
+  }).catch(() => {
+    rageMusic.muted = wasMuted;
+    rageMusic.volume = previousVolume;
+  });
+}
 
 function updateAudioButton() {
   if (!audioToggle) return;
@@ -213,6 +249,7 @@ function unlockAudioIfNeeded() {
   if (audioUnlocked) return;
   audioUnlocked = true;
   if (audioMuted) return;
+  primeRageTrackIfNeeded();
   if (bgMusic.paused) {
     bgMusic.currentTime = 0;
     bgMusic.play().catch(() => {
@@ -225,17 +262,24 @@ function duckBackgroundMusic() {
   if (bgWasDucked) return;
   bgWasDucked = true;
   if (audioMuted) return;
-  // Rage start should be an immediate handoff.
+  // Rage start should be an immediate handoff with no overlapping tracks.
   if (bgFadeRaf) cancelAnimationFrame(bgFadeRaf);
   bgFadeRaf = null;
   bgMusic.volume = BG_DUCKED_VOLUME;
+  bgMusic.pause();
 }
 
 function restoreBackgroundMusic() {
   if (!bgWasDucked) return;
   bgWasDucked = false;
   if (audioMuted) return;
-  fadeBgMusicTo(BG_MUSIC_VOLUME, BG_RESTORE_FADE_MS);
+  const resumeAndFade = () => fadeBgMusicTo(BG_MUSIC_VOLUME, BG_RESTORE_FADE_MS);
+  if (bgMusic.paused) {
+    bgMusic.volume = BG_DUCKED_VOLUME;
+    bgMusic.play().then(resumeAndFade).catch(() => {});
+    return;
+  }
+  resumeAndFade();
 }
 
 function setAudioMuted(nextMuted) {
@@ -251,9 +295,10 @@ function setAudioMuted(nextMuted) {
     rageMusicActive = false;
     if (rageFadeRaf) cancelAnimationFrame(rageFadeRaf);
     rageFadeRaf = null;
-  } else if (audioUnlocked && bgMusic.paused) {
+  } else if (audioUnlocked && bgMusic.paused && !isRageMode()) {
     bgMusic.volume = bgWasDucked ? BG_DUCKED_VOLUME : BG_MUSIC_VOLUME;
     bgMusic.play().catch(() => {});
+    primeRageTrackIfNeeded();
   }
   updateAudioButton();
 }
@@ -1193,7 +1238,8 @@ function activateLuluRage() {
   rageMusic.currentTime = 0;
   rageMusic.volume = RAGE_MUSIC_VOLUME;
   rageMusicActive = true;
-  if (!audioMuted) rageMusic.play().catch(() => {});
+  ragePlayPending = true;
+  if (!audioMuted) playRageTrack();
   rageIndicator.hidden = false;
   rageTimer.textContent = `${((RAGE_DURATION_MS + RAGE_POPUP_MS) / 1000).toFixed(1)}s`;
   ragePopup.hidden = false;
@@ -1209,6 +1255,16 @@ function activateLuluRage() {
 
 document.addEventListener("pointerdown", unlockAudioIfNeeded, { once: true });
 document.addEventListener("keydown", unlockAudioIfNeeded, { once: true });
+document.addEventListener("pointerdown", () => {
+  if (!ragePlayPending || !isRageMode() || audioMuted) return;
+  primeRageTrackIfNeeded();
+  playRageTrack();
+});
+document.addEventListener("keydown", () => {
+  if (!ragePlayPending || !isRageMode() || audioMuted) return;
+  primeRageTrackIfNeeded();
+  playRageTrack();
+});
 
 audioToggle.addEventListener("click", () => {
   unlockAudioIfNeeded();

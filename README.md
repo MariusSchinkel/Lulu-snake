@@ -35,6 +35,8 @@ Then open:
 - Corner sprite rendering has been removed; turns now use regular oriented body segments, with tail sprite retained.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 - Swipe threshold is lower on mobile screens for quicker touch direction changes.
+- Rage audio now primes `lulu-rage.mp3` on user gesture and retries during active rage if a mobile autoplay block occurs.
+- During Lulu-Rage, background music is paused and resumes after rage ends to avoid overlapping tracks.
 
 ### Body Animation Assets
 
