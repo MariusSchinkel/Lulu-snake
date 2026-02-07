@@ -1,24 +1,89 @@
 # Lulu-Snake
 
-## Run
+Classic Snake with a dog-themed visual style, Lulu-Rage mode, music, and a global Top 5 highscore list.
 
-1. From the repo root, start a simple server:
+## Run Locally
+
+From this folder (`Lulu_Snake`), start a simple static server:
 
 ```bash
 python3 -m http.server 8000
 ```
 
-2. Open `http://localhost:8000` in your browser.
+Then open:
+
+`http://localhost:8000`
 
 ## Controls
 
-- Arrow keys or WASD to move
-- `Space` to pause/resume
-- `R` to restart
-- Select `Easy`, `Medium`, or `Hard` from the in-game start window
-- On-screen buttons are available for touch
+- `Arrow keys` or `WASD`: move
+- `Space`: pause/resume
+- `R`: restart
+- On-screen buttons are available for touch/mobile
+- `Audio On/Off` button toggles music
 
-## Notes
+## Gameplay Notes
 
-- The game logic is deterministic and separated in `game.js`.
-- The UI is intentionally minimal and self-contained.
+- Walls are wrap-around (no wall collisions).
+- Difficulty selection is disabled (game always uses easy baseline pacing).
+- Speed increases gradually as snake length grows.
+- Lulu-Rage:
+- Random rage-treat chance is `7%`
+- Guaranteed rage-treat if none appeared in `15` treats
+- Rage lasts `15s` plus popup intro time
+- Rage gives double points and a temporary speed boost
+
+## Highscores (Cross-Device)
+
+- Top 5 scores are synced via Supabase (`public.lulu_scores`).
+- The game keeps a local cache as fallback if network requests fail.
+- Name defaults to `Player 1` if empty.
+
+## Supabase Setup
+
+Create table/policies in Supabase SQL Editor:
+
+```sql
+create table if not exists public.lulu_scores (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(name) between 1 and 24),
+  score integer not null check (score >= 0),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists lulu_scores_rank_idx
+on public.lulu_scores (score desc, created_at asc);
+
+alter table public.lulu_scores enable row level security;
+
+grant select, insert, update on table public.lulu_scores to anon;
+
+drop policy if exists "Public can read scores" on public.lulu_scores;
+create policy "Public can read scores"
+on public.lulu_scores for select to anon using (true);
+
+drop policy if exists "Public can insert scores" on public.lulu_scores;
+create policy "Public can insert scores"
+on public.lulu_scores for insert to anon with check (true);
+
+drop policy if exists "Public can update score names" on public.lulu_scores;
+create policy "Public can update score names"
+on public.lulu_scores
+for update to anon
+using (true)
+with check (char_length(name) between 1 and 24);
+```
+
+Supabase config is currently set directly in `app.js`.
+
+## Deploy (Netlify)
+
+1. Push this repository to GitHub.
+2. In Netlify, import the GitHub repo.
+3. Use:
+- Base directory: empty
+- Publish directory: `.`
+- Build command: empty
+4. Deploy.
+
+Every new commit pushed to `main` triggers an automatic redeploy.
