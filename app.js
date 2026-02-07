@@ -319,8 +319,11 @@ async function loadAssets() {
     loadImage("./assets/treat-4.png"),
     loadImage("./assets/treat-5.png"),
   ]);
-  const walkFrames = normalizeBodyFrames([walk1, walk2, walk3, walk4].filter((frame) => isRenderableImage(frame)));
-  const fallbackFrame = createTrimmedBodyTexture(bodyFallback);
+  const preparedWalkFrames = [walk1, walk2, walk3, walk4]
+    .filter((frame) => isRenderableImage(frame))
+    .map((frame) => prepareBodyFrame(frame));
+  const walkFrames = normalizeBodyFrames(preparedWalkFrames);
+  const fallbackFrame = createTrimmedBodyTexture(prepareBodyFrame(bodyFallback));
   const bodyFrames = walkFrames.length > 0 ? walkFrames : [fallbackFrame];
   images = { head, bodyFrames, treats };
 }
@@ -330,6 +333,106 @@ function isRenderableImage(source) {
   const width = source.naturalWidth || source.width || 0;
   const height = source.naturalHeight || source.height || 0;
   return width > 0 && height > 0;
+}
+
+function prepareBodyFrame(source) {
+  if (!isRenderableImage(source)) return source;
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx2d = canvas.getContext("2d");
+  if (!ctx2d) return source;
+  ctx2d.drawImage(source, 0, 0, width, height);
+
+  const imageData = ctx2d.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  let hasTransparency = false;
+  for (let i = 3; i < data.length; i += 4) {
+    if (data[i] < 250) {
+      hasTransparency = true;
+      break;
+    }
+  }
+
+  if (!hasTransparency) {
+    clearEdgeConnectedBackground(imageData, width, height);
+    ctx2d.putImageData(imageData, 0, 0);
+  }
+
+  return canvas;
+}
+
+function clearEdgeConnectedBackground(imageData, width, height) {
+  const data = imageData.data;
+  const pixelOffset = (x, y) => (y * width + x) * 4;
+  const cornerColors = [
+    [
+      data[pixelOffset(0, 0)],
+      data[pixelOffset(0, 0) + 1],
+      data[pixelOffset(0, 0) + 2],
+    ],
+    [
+      data[pixelOffset(width - 1, 0)],
+      data[pixelOffset(width - 1, 0) + 1],
+      data[pixelOffset(width - 1, 0) + 2],
+    ],
+    [
+      data[pixelOffset(0, height - 1)],
+      data[pixelOffset(0, height - 1) + 1],
+      data[pixelOffset(0, height - 1) + 2],
+    ],
+    [
+      data[pixelOffset(width - 1, height - 1)],
+      data[pixelOffset(width - 1, height - 1) + 1],
+      data[pixelOffset(width - 1, height - 1) + 2],
+    ],
+  ];
+  const thresholdSq = 34 * 34;
+
+  const matchesBackground = (offset) => {
+    const r = data[offset];
+    const g = data[offset + 1];
+    const b = data[offset + 2];
+    return cornerColors.some(([cr, cg, cb]) => {
+      const dr = r - cr;
+      const dg = g - cg;
+      const db = b - cb;
+      return dr * dr + dg * dg + db * db <= thresholdSq;
+    });
+  };
+
+  const visited = new Uint8Array(width * height);
+  const queue = [];
+
+  const enqueue = (x, y) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    const flat = y * width + x;
+    if (visited[flat]) return;
+    visited[flat] = 1;
+    const offset = flat * 4;
+    if (!matchesBackground(offset)) return;
+    data[offset + 3] = 0;
+    queue.push([x, y]);
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueue(x, 0);
+    enqueue(x, height - 1);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueue(0, y);
+    enqueue(width - 1, y);
+  }
+
+  while (queue.length > 0) {
+    const [x, y] = queue.pop();
+    enqueue(x + 1, y);
+    enqueue(x - 1, y);
+    enqueue(x, y + 1);
+    enqueue(x, y - 1);
+  }
 }
 
 function getOpaqueBounds(source) {
@@ -545,12 +648,12 @@ function drawGrid() {
     activeBodyTexture &&
     (activeBodyTexture instanceof HTMLCanvasElement || activeBodyTexture.complete === true);
   if (bodyTextureReady) {
-    const scale = size / activeBodyTexture.width;
+    const scale = strokeWidth / activeBodyTexture.height;
     const drawBodyPatternPass = (offsetX, offsetY, alpha) => {
       const pattern = ctx.createPattern(activeBodyTexture, "repeat");
       if (!pattern) return false;
       if (typeof pattern.setTransform !== "function" || typeof DOMMatrix !== "function") return false;
-      // Two offset passes reduce alpha-edge seams from the fur texture.
+      // Scale by source height so one body frame has a readable in-game size.
       pattern.setTransform(new DOMMatrix([scale, 0, 0, scale, offsetX, offsetY]));
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = pattern;
@@ -559,7 +662,7 @@ function drawGrid() {
       return true;
     };
 
-    const didDraw = drawBodyPatternPass(0, 0, 1) && drawBodyPatternPass(size * 0.5, size * 0.5, 0.7);
+    const didDraw = drawBodyPatternPass(0, 0, 1);
     if (!didDraw) {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = "#d9ab63";
