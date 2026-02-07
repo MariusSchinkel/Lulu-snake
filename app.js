@@ -319,7 +319,49 @@ async function loadAssets() {
     loadImage("./assets/treat-4.png"),
     loadImage("./assets/treat-5.png"),
   ]);
-  images = { head, body, treats };
+  images = { head, body: createTrimmedBodyTexture(body), treats };
+}
+
+function createTrimmedBodyTexture(source) {
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  if (!width || !height) return source;
+
+  const scanCanvas = document.createElement("canvas");
+  scanCanvas.width = width;
+  scanCanvas.height = height;
+  const scanCtx = scanCanvas.getContext("2d");
+  if (!scanCtx) return source;
+  scanCtx.drawImage(source, 0, 0, width, height);
+
+  const { data } = scanCtx.getImageData(0, 0, width, height);
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = data[(y * width + x) * 4 + 3];
+      if (alpha < 12) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+
+  if (maxX < minX || maxY < minY) return source;
+
+  const outWidth = maxX - minX + 1;
+  const outHeight = maxY - minY + 1;
+  const trimmed = document.createElement("canvas");
+  trimmed.width = outWidth;
+  trimmed.height = outHeight;
+  const trimmedCtx = trimmed.getContext("2d");
+  if (!trimmedCtx) return source;
+  trimmedCtx.drawImage(source, minX, minY, outWidth, outHeight, 0, 0, outWidth, outHeight);
+  return trimmed;
 }
 
 function drawGrid() {
@@ -455,19 +497,27 @@ function drawGrid() {
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.lineWidth = strokeWidth;
-  if (images.body && images.body.complete) {
-    const bodyPattern = ctx.createPattern(images.body, "repeat");
-    if (bodyPattern) {
-      if (typeof bodyPattern.setTransform === "function" && typeof DOMMatrix === "function") {
-        // Keep pattern scale consistent per grid cell so body shading stays uniform across the board.
-        const scale = size / images.body.width;
-        bodyPattern.setTransform(new DOMMatrix().scaleSelf(scale, scale));
-      }
-      ctx.strokeStyle = bodyPattern;
+  const bodyTextureReady =
+    images.body && (images.body instanceof HTMLCanvasElement || images.body.complete === true);
+  if (bodyTextureReady) {
+    const scale = size / images.body.width;
+    const drawBodyPatternPass = (offsetX, offsetY, alpha) => {
+      const pattern = ctx.createPattern(images.body, "repeat");
+      if (!pattern) return false;
+      if (typeof pattern.setTransform !== "function" || typeof DOMMatrix !== "function") return false;
+      // Two offset passes reduce alpha-edge seams from the fur texture.
+      pattern.setTransform(new DOMMatrix([scale, 0, 0, scale, offsetX, offsetY]));
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = pattern;
       drawBodyPath();
       ctx.stroke();
-    } else {
-      ctx.strokeStyle = "#c9954a";
+      return true;
+    };
+
+    const didDraw = drawBodyPatternPass(0, 0, 1) && drawBodyPatternPass(size * 0.5, size * 0.5, 0.7);
+    if (!didDraw) {
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = "#d9ab63";
       drawBodyPath();
       ctx.stroke();
     }
@@ -476,6 +526,7 @@ function drawGrid() {
     drawBodyPath();
     ctx.stroke();
   }
+  ctx.globalAlpha = 1;
   ctx.restore();
 
   const headImg = images.head;
