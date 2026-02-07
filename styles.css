@@ -394,19 +394,9 @@ canvas {
 
 .controls {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   gap: 16px;
-  flex-wrap: wrap;
-}
-
-.dpad {
-  display: grid;
-  gap: 8px;
-}
-
-.dpad-row {
-  display: flex;
-  gap: 8px;
+  align-items: center;
 }
 
 button {
@@ -496,30 +486,19 @@ button:active {
   }
 
   .controls {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 10px;
-    align-items: end;
-    flex-wrap: nowrap;
-  }
-
-  .dpad {
-    justify-items: center;
-  }
-
-  .dpad button {
-    min-width: 74px;
-    min-height: 46px;
-    font-size: 16px;
+    justify-content: center;
   }
 
   .actions {
     display: grid;
-    gap: 8px;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
   }
 
   .actions button {
-    min-width: 100px;
+    min-width: 0;
+    width: 100%;
     min-height: 46px;
     font-size: 16px;
   }
@@ -537,10 +516,6 @@ button:active {
 @media (max-width: 420px) {
   .title p {
     display: none;
-  }
-
-  .controls {
-    grid-template-columns: 1fr;
   }
 
   .actions {

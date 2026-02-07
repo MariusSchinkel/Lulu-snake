@@ -19,7 +19,6 @@ const ragePopup = document.getElementById("rage-popup");
 const audioToggle = document.getElementById("audio-toggle");
 const pauseButton = document.getElementById("pause");
 const restartButton = document.getElementById("restart");
-const controlButtons = document.querySelectorAll("[data-dir]");
 const shellEl = document.querySelector(".shell");
 const topbarEl = document.querySelector(".topbar");
 const controlsEl = document.querySelector(".controls");
@@ -785,7 +784,12 @@ function handleDirection(direction) {
   state = setDirection(state, direction);
 }
 
+function isSwipeInputTarget(target) {
+  return target instanceof Element && target.closest("button, input, textarea, select, a, label");
+}
+
 function handleSwipeDirection(dx, dy) {
+  if (!gameStarted || !state.alive) return false;
   if (Math.abs(dx) < SWIPE_THRESHOLD_PX && Math.abs(dy) < SWIPE_THRESHOLD_PX) return false;
   if (Math.abs(dx) > Math.abs(dy)) {
     handleDirection(dx > 0 ? "right" : "left");
@@ -861,27 +865,15 @@ nameEntryInput.addEventListener("keydown", (event) => {
   }
 });
 
-controlButtons.forEach((button) => {
-  button.addEventListener("pointerdown", (event) => {
-    if (event.cancelable) event.preventDefault();
-    handleDirection(button.dataset.dir);
-  });
-  button.addEventListener("click", () => {
-    handleDirection(button.dataset.dir);
-  });
-});
-
-canvas.addEventListener("pointerdown", (event) => {
-  if (event.pointerType === "mouse" && event.button !== 0) return;
+document.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse") return;
+  if (isSwipeInputTarget(event.target)) return;
   swipePointerId = event.pointerId;
   swipeLastX = event.clientX;
   swipeLastY = event.clientY;
-  if (canvas.setPointerCapture) {
-    canvas.setPointerCapture(event.pointerId);
-  }
 });
 
-canvas.addEventListener("pointermove", (event) => {
+document.addEventListener("pointermove", (event) => {
   if (event.pointerId !== swipePointerId) return;
   const dx = event.clientX - swipeLastX;
   const dy = event.clientY - swipeLastY;
@@ -895,8 +887,8 @@ function endSwipe(event) {
   swipePointerId = null;
 }
 
-canvas.addEventListener("pointerup", endSwipe);
-canvas.addEventListener("pointercancel", endSwipe);
+document.addEventListener("pointerup", endSwipe);
+document.addEventListener("pointercancel", endSwipe);
 
 document.addEventListener("keydown", handleKey);
 
