@@ -39,6 +39,8 @@ Then open:
 - During Lulu-Rage, background music is paused and resumes after rage ends to avoid overlapping tracks.
 - Rage trigger now uses a run-in dog event: a dog enters, pees on the board, and only then the special pee treat becomes edible.
 - During Lulu-Rage, all food is rendered as dog-pee style treats.
+- Rage run-in/pee timing is slower for clearer visual readability.
+- Optional rage assets can be provided as `assets/rage-pee.png` (pee treat) and `assets/rage-dog.png` (running/peeing dog).
 
 ### Body Animation Assets
 

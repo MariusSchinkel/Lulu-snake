@@ -49,7 +49,7 @@ const BASE_START_TICK_MS = 230;
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
-let images = { head: null, bodyFrames: [], bodyPlain: null, tail: null, treats: [] };
+let images = { head: null, bodyFrames: [], bodyPlain: null, tail: null, treats: [], ragePee: null, rageDog: null };
 let lastFoodKey = null;
 let currentTreatIndex = 0;
 let bodyFrameIndex = 0;
@@ -355,7 +355,7 @@ function fadeOutRageAndStop(durationMs) {
 }
 
 async function loadAssets() {
-  const [head, walk1, walk2, walk3, walk4, bodyFallback, tail, ...treats] = await Promise.all([
+  const [head, walk1, walk2, walk3, walk4, bodyFallback, tail, ragePee, rageDog, ...treats] = await Promise.all([
     loadImage("./assets/snake-head.png"),
     loadImage("./assets/snake-body-walk-1.png"),
     loadImage("./assets/snake-body-walk-2.png"),
@@ -363,6 +363,8 @@ async function loadAssets() {
     loadImage("./assets/snake-body-walk-4.png"),
     loadImage("./assets/snake-body.png"),
     loadImage("./assets/snake-tail.png"),
+    loadImage("./assets/rage-pee.png"),
+    loadImage("./assets/rage-dog.png"),
     loadImage("./assets/treat-1.png"),
     loadImage("./assets/treat-2.png"),
     loadImage("./assets/treat-3.png"),
@@ -380,6 +382,8 @@ async function loadAssets() {
     bodyFrames,
     bodyPlain: fallbackFrame,
     tail: createTrimmedBodyTexture(prepareBodyFrame(tail)),
+    ragePee: createTrimmedBodyTexture(prepareBodyFrame(ragePee)),
+    rageDog: createTrimmedBodyTexture(prepareBodyFrame(rageDog)),
     treats,
   };
 }
@@ -583,7 +587,7 @@ function createRageRunner(targetCell, gridSize) {
     endX,
     endY,
     startTs: performance.now(),
-    durationMs: 1150,
+    durationMs: 1850,
   };
 }
 
@@ -622,6 +626,16 @@ function drawGrid() {
     const cx = cell.x * size + size / 2;
     const cy = cell.y * size + size / 2;
     const r = size * (boosted ? 0.56 : 0.5);
+    const peeImg = images.ragePee;
+    if (isRenderableImage(peeImg)) {
+      const assetSize = size * (boosted ? 1.38 : 1.24);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((cell.x * 13 + cell.y * 7) * 0.05);
+      ctx.drawImage(peeImg, -assetSize / 2, -assetSize / 2, assetSize, assetSize);
+      ctx.restore();
+      return;
+    }
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate((cell.x * 13 + cell.y * 7) * 0.07);
@@ -682,11 +696,14 @@ function drawGrid() {
     const y = rageRunner.startY + (rageRunner.endY - rageRunner.startY) * t;
     const runnerSize = size * 1.34;
 
-    if (images.head && images.head.complete) {
+    const rageDogImg = images.rageDog && (images.rageDog instanceof HTMLCanvasElement || images.rageDog.complete === true)
+      ? images.rageDog
+      : images.head;
+    if (isRenderableImage(rageDogImg)) {
       ctx.save();
       ctx.translate(x * size + size / 2, y * size + size / 2);
       if (!rageRunner.fromLeft) ctx.scale(-1, 1);
-      ctx.drawImage(images.head, -runnerSize / 2, -runnerSize / 2, runnerSize, runnerSize);
+      ctx.drawImage(rageDogImg, -runnerSize / 2, -runnerSize / 2, runnerSize, runnerSize);
       ctx.restore();
     } else {
       drawFallbackCell({ x: Math.floor(x), y: Math.floor(y) }, "#f5d07f");
