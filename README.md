@@ -26,8 +26,8 @@ Then open:
 
 - Walls are wrap-around (no wall collisions).
 - Difficulty selection is disabled (game always uses easy baseline pacing).
-- Start speed is slower now, then increases gradually as snake length grows.
-- Snake body rendering is grid-aligned to keep texture appearance more consistent across board positions.
+- Start speed is now noticeably slower, then increases gradually as snake length grows.
+- Snake body rendering keeps grid alignment and now removes the flat brown underlay so fur texture edges stay natural.
 
 ### Lulu-Rage
 

@@ -45,9 +45,9 @@ const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const START_SPEEDS = {
-  easy: 185,
-  medium: 155,
-  hard: 125,
+  easy: 230,
+  medium: 195,
+  hard: 165,
 };
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
@@ -456,11 +456,6 @@ function drawGrid() {
   ctx.lineCap = "round";
   ctx.lineWidth = strokeWidth;
   if (images.body && images.body.complete) {
-    // Solid underlay prevents pattern artifacts in some canvas implementations.
-    ctx.strokeStyle = "#c9954a";
-    drawBodyPath();
-    ctx.stroke();
-
     const bodyPattern = ctx.createPattern(images.body, "repeat");
     if (bodyPattern) {
       if (typeof bodyPattern.setTransform === "function" && typeof DOMMatrix === "function") {
