@@ -30,11 +30,10 @@ Then open:
 - Snake body uses 4 walk-cycle frames that animate with movement speed.
 - Body rendering now draws one oriented sprite per snake segment (instead of texture-stroked lines) for cleaner continuity in turns and wraps.
 - A shared trim box is applied across walk frames to keep frame alignment stable.
-- Curved turns now use `assets/snake-body-corner.png`.
 - Tail segment now uses `assets/snake-tail.png`.
 - To reduce visual clutter, animated legged segments are concentrated near the head while long-body continuity uses the plain body texture.
 - Leftward movement now uses sprite mirroring (instead of 180-degree rotation) so head/body stay upright.
-- Corner orientation now uses true neighbor vectors from each segment, fixing upside-down turn cases (for example after down -> left turns).
+- Corner sprite rendering has been removed; turns now use regular oriented body segments, with tail sprite retained.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 
 ### Body Animation Assets
