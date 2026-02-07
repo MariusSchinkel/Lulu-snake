@@ -23,6 +23,7 @@ const controlButtons = document.querySelectorAll("[data-dir]");
 const shellEl = document.querySelector(".shell");
 const topbarEl = document.querySelector(".topbar");
 const controlsEl = document.querySelector(".controls");
+const stageEl = document.querySelector(".stage");
 
 const CELL_COUNT = 20;
 const LAST_NAME_KEY = "lulu-snake-last-name";
@@ -43,6 +44,7 @@ const BG_DUCKED_VOLUME = 0.12;
 const RAGE_MUSIC_VOLUME = 0.9;
 const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
+const SWIPE_THRESHOLD_PX = 26;
 const START_SPEEDS = {
   easy: 155,
   medium: 125,
@@ -69,6 +71,9 @@ let audioMuted = localStorage.getItem(AUDIO_MUTED_KEY) === "1";
 let treatsSinceRage = 0;
 let bgFadeRaf = null;
 let rageFadeRaf = null;
+let swipePointerId = null;
+let swipeLastX = 0;
+let swipeLastY = 0;
 
 const bgMusic = new Audio("./assets/bg-music.mp3");
 bgMusic.loop = true;
@@ -550,14 +555,25 @@ function fitCanvasToViewport() {
   const shellPadX = parseFloat(shellStyle.paddingLeft) + parseFloat(shellStyle.paddingRight);
   const shellPadY = parseFloat(shellStyle.paddingTop) + parseFloat(shellStyle.paddingBottom);
   const shellGap = parseFloat(shellStyle.rowGap || shellStyle.gap || "20");
-  const stagePad = 28; // stage padding + border safety
+  const stageStyle = getComputedStyle(stageEl);
+  const stagePadX = parseFloat(stageStyle.paddingLeft) + parseFloat(stageStyle.paddingRight);
+  const stagePadY = parseFloat(stageStyle.paddingTop) + parseFloat(stageStyle.paddingBottom);
+  const stageBorderX = parseFloat(stageStyle.borderLeftWidth) + parseFloat(stageStyle.borderRightWidth);
+  const stageBorderY = parseFloat(stageStyle.borderTopWidth) + parseFloat(stageStyle.borderBottomWidth);
+  const stageChromeX = stagePadX + stageBorderX + 2;
+  const stageChromeY = stagePadY + stageBorderY + 2;
+  const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const bodyStyle = getComputedStyle(document.body);
+  const bodyPadY = parseFloat(bodyStyle.paddingTop) + parseFloat(bodyStyle.paddingBottom);
 
-  const byHeight =
-    shellEl.clientHeight - shellPadY - topbarEl.offsetHeight - controlsEl.offsetHeight - shellGap * 2 - stagePad;
-  const byWidth = shellEl.clientWidth - shellPadX - stagePad;
-  const nextSize = Math.max(260, Math.floor(Math.min(byHeight, byWidth)));
+  const byShellHeight =
+    shellEl.clientHeight - shellPadY - topbarEl.offsetHeight - controlsEl.offsetHeight - shellGap * 2 - stageChromeY;
+  const byViewportHeight =
+    viewportHeight - bodyPadY - shellPadY - topbarEl.offsetHeight - controlsEl.offsetHeight - shellGap * 2 - stageChromeY;
+  const byWidth = shellEl.clientWidth - shellPadX - stageChromeX;
+  const nextSize = Math.floor(Math.min(byShellHeight, byViewportHeight, byWidth));
 
-  if (nextSize > 0 && (canvas.width !== nextSize || canvas.height !== nextSize)) {
+  if (nextSize >= 140 && (canvas.width !== nextSize || canvas.height !== nextSize)) {
     canvas.width = nextSize;
     canvas.height = nextSize;
     canvas.style.width = `${nextSize}px`;
@@ -769,6 +785,16 @@ function handleDirection(direction) {
   state = setDirection(state, direction);
 }
 
+function handleSwipeDirection(dx, dy) {
+  if (Math.abs(dx) < SWIPE_THRESHOLD_PX && Math.abs(dy) < SWIPE_THRESHOLD_PX) return false;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    handleDirection(dx > 0 ? "right" : "left");
+  } else {
+    handleDirection(dy > 0 ? "down" : "up");
+  }
+  return true;
+}
+
 function handleKey(event) {
   const key = event.key.toLowerCase();
   const target = event.target;
@@ -836,10 +862,41 @@ nameEntryInput.addEventListener("keydown", (event) => {
 });
 
 controlButtons.forEach((button) => {
+  button.addEventListener("pointerdown", (event) => {
+    if (event.cancelable) event.preventDefault();
+    handleDirection(button.dataset.dir);
+  });
   button.addEventListener("click", () => {
     handleDirection(button.dataset.dir);
   });
 });
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.pointerType === "mouse" && event.button !== 0) return;
+  swipePointerId = event.pointerId;
+  swipeLastX = event.clientX;
+  swipeLastY = event.clientY;
+  if (canvas.setPointerCapture) {
+    canvas.setPointerCapture(event.pointerId);
+  }
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  if (event.pointerId !== swipePointerId) return;
+  const dx = event.clientX - swipeLastX;
+  const dy = event.clientY - swipeLastY;
+  if (!handleSwipeDirection(dx, dy)) return;
+  swipeLastX = event.clientX;
+  swipeLastY = event.clientY;
+});
+
+function endSwipe(event) {
+  if (event.pointerId !== swipePointerId) return;
+  swipePointerId = null;
+}
+
+canvas.addEventListener("pointerup", endSwipe);
+canvas.addEventListener("pointercancel", endSwipe);
 
 document.addEventListener("keydown", handleKey);
 
@@ -858,6 +915,10 @@ loadAssets().then(() => {
 });
 
 window.addEventListener("resize", fitCanvasToViewport);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", fitCanvasToViewport);
+  window.visualViewport.addEventListener("scroll", fitCanvasToViewport);
+}
 
 function assignFoodStyle() {
   if (images.treats.length > 0) {
