@@ -464,33 +464,6 @@ body.rage-mode .game-title span {
   color: var(--muted);
 }
 
-.difficulty-options {
-  display: flex;
-  gap: 10px;
-  justify-content: center;
-}
-
-.difficulty-btn {
-  min-width: 82px;
-  background: #d4a662;
-  color: #5c3b16;
-  font-weight: 600;
-}
-
-.difficulty-btn.active {
-  background: #8e5f1f;
-  color: #fff8eb;
-  border-color: #69410d;
-  box-shadow: 0 0 0 2px #f5dea9, 0 8px 16px rgba(71, 42, 10, 0.25);
-  transform: translateY(-1px);
-}
-
-.difficulty-current {
-  margin: 0;
-  font-weight: 700;
-  color: #5d3a15;
-}
-
 .menu-scores {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -710,7 +683,4 @@ button:active {
     min-width: 0;
   }
 
-  .difficulty-options {
-    flex-wrap: wrap;
-  }
 }

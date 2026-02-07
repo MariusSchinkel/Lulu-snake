@@ -9,7 +9,6 @@ const overlay = document.getElementById("overlay");
 const top5Title = document.getElementById("top5-title");
 const menuTitle = document.getElementById("menu-title");
 const menuText = document.getElementById("menu-text");
-const difficultyCurrent = document.getElementById("difficulty-current");
 const menuHighscoreList = document.getElementById("menu-highscore-list");
 const nameEntry = document.getElementById("name-entry");
 const nameEntryInput = document.getElementById("name-entry-input");
@@ -44,18 +43,15 @@ const RAGE_MUSIC_VOLUME = 0.9;
 const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
-const START_SPEEDS = {
-  easy: 230,
-  medium: 195,
-  hard: 165,
-};
+const BASE_START_TICK_MS = 230;
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
-let images = { head: null, body: null, treats: [] };
+let images = { head: null, bodyFrames: [], treats: [] };
 let lastFoodKey = null;
 let currentTreatIndex = 0;
+let bodyFrameIndex = 0;
 let gameStarted = false;
 let pendingHighscore = null;
 let highscores = [];
@@ -310,8 +306,12 @@ function fadeOutRageAndStop(durationMs) {
 }
 
 async function loadAssets() {
-  const [head, body, ...treats] = await Promise.all([
+  const [head, walk1, walk2, walk3, walk4, bodyFallback, ...treats] = await Promise.all([
     loadImage("./assets/snake-head.png"),
+    loadImage("./assets/snake-body-walk-1.png"),
+    loadImage("./assets/snake-body-walk-2.png"),
+    loadImage("./assets/snake-body-walk-3.png"),
+    loadImage("./assets/snake-body-walk-4.png"),
     loadImage("./assets/snake-body.png"),
     loadImage("./assets/treat-1.png"),
     loadImage("./assets/treat-2.png"),
@@ -319,19 +319,29 @@ async function loadAssets() {
     loadImage("./assets/treat-4.png"),
     loadImage("./assets/treat-5.png"),
   ]);
-  images = { head, body: createTrimmedBodyTexture(body), treats };
+  const walkFrames = normalizeBodyFrames([walk1, walk2, walk3, walk4].filter((frame) => isRenderableImage(frame)));
+  const fallbackFrame = createTrimmedBodyTexture(bodyFallback);
+  const bodyFrames = walkFrames.length > 0 ? walkFrames : [fallbackFrame];
+  images = { head, bodyFrames, treats };
 }
 
-function createTrimmedBodyTexture(source) {
+function isRenderableImage(source) {
+  if (!source) return false;
+  const width = source.naturalWidth || source.width || 0;
+  const height = source.naturalHeight || source.height || 0;
+  return width > 0 && height > 0;
+}
+
+function getOpaqueBounds(source) {
+  if (!isRenderableImage(source)) return null;
   const width = source.naturalWidth || source.width;
   const height = source.naturalHeight || source.height;
-  if (!width || !height) return source;
 
   const scanCanvas = document.createElement("canvas");
   scanCanvas.width = width;
   scanCanvas.height = height;
   const scanCtx = scanCanvas.getContext("2d");
-  if (!scanCtx) return source;
+  if (!scanCtx) return null;
   scanCtx.drawImage(source, 0, 0, width, height);
 
   const { data } = scanCtx.getImageData(0, 0, width, height);
@@ -351,17 +361,49 @@ function createTrimmedBodyTexture(source) {
     }
   }
 
-  if (maxX < minX || maxY < minY) return source;
+  if (maxX < minX || maxY < minY) return null;
+  return { minX, minY, maxX, maxY };
+}
 
-  const outWidth = maxX - minX + 1;
-  const outHeight = maxY - minY + 1;
+function createTrimmedBodyTexture(source, bounds = null) {
+  if (!isRenderableImage(source)) return source;
+  const finalBounds = bounds || getOpaqueBounds(source);
+  if (!finalBounds) return source;
+  const outWidth = finalBounds.maxX - finalBounds.minX + 1;
+  const outHeight = finalBounds.maxY - finalBounds.minY + 1;
   const trimmed = document.createElement("canvas");
   trimmed.width = outWidth;
   trimmed.height = outHeight;
   const trimmedCtx = trimmed.getContext("2d");
   if (!trimmedCtx) return source;
-  trimmedCtx.drawImage(source, minX, minY, outWidth, outHeight, 0, 0, outWidth, outHeight);
+  trimmedCtx.drawImage(
+    source,
+    finalBounds.minX,
+    finalBounds.minY,
+    outWidth,
+    outHeight,
+    0,
+    0,
+    outWidth,
+    outHeight
+  );
   return trimmed;
+}
+
+function normalizeBodyFrames(frames) {
+  if (frames.length === 0) return [];
+  const frameBounds = frames.map((frame) => getOpaqueBounds(frame)).filter((bounds) => bounds);
+  if (frameBounds.length === 0) return frames;
+  const sharedBounds = frameBounds.reduce(
+    (acc, bounds) => ({
+      minX: Math.min(acc.minX, bounds.minX),
+      minY: Math.min(acc.minY, bounds.minY),
+      maxX: Math.max(acc.maxX, bounds.maxX),
+      maxY: Math.max(acc.maxY, bounds.maxY),
+    }),
+    { ...frameBounds[0] }
+  );
+  return frames.map((frame) => createTrimmedBodyTexture(frame, sharedBounds));
 }
 
 function drawGrid() {
@@ -435,6 +477,8 @@ function drawGrid() {
 
   const headSize = size * 1.32;
   const strokeWidth = Math.max(2, Math.round(headSize * 0.95));
+  const activeBodyTexture =
+    images.bodyFrames.length > 0 ? images.bodyFrames[bodyFrameIndex % images.bodyFrames.length] : null;
 
   const collectBodyLines = () => {
     const lines = [];
@@ -498,11 +542,12 @@ function drawGrid() {
   ctx.lineCap = "round";
   ctx.lineWidth = strokeWidth;
   const bodyTextureReady =
-    images.body && (images.body instanceof HTMLCanvasElement || images.body.complete === true);
+    activeBodyTexture &&
+    (activeBodyTexture instanceof HTMLCanvasElement || activeBodyTexture.complete === true);
   if (bodyTextureReady) {
-    const scale = size / images.body.width;
+    const scale = size / activeBodyTexture.width;
     const drawBodyPatternPass = (offsetX, offsetY, alpha) => {
-      const pattern = ctx.createPattern(images.body, "repeat");
+      const pattern = ctx.createPattern(activeBodyTexture, "repeat");
       if (!pattern) return false;
       if (typeof pattern.setTransform !== "function" || typeof DOMMatrix !== "function") return false;
       // Two offset passes reduce alpha-edge seams from the fur texture.
@@ -552,6 +597,11 @@ function updateScore() {
   scoreEl.textContent = String(state.score);
 }
 
+function advanceBodyWalkFrame() {
+  if (images.bodyFrames.length <= 1) return;
+  bodyFrameIndex = (bodyFrameIndex + 1) % images.bodyFrames.length;
+}
+
 function tick() {
   updateRageState();
   if (paused || !state.alive || !gameStarted) {
@@ -562,6 +612,7 @@ function tick() {
   const prevScore = state.score;
   const ateRageTreat = rageTreatActive;
   state = stepGame(state);
+  advanceBodyWalkFrame();
   const gained = state.score - prevScore;
   if (gained > 0 && ateRageTreat && gained < 2) {
     state = { ...state, score: state.score + (2 - gained) };
@@ -585,7 +636,7 @@ function tick() {
 }
 
 function getTickMs() {
-  const base = START_SPEEDS.easy;
+  const base = BASE_START_TICK_MS;
   const growth = Math.max(0, state.snake.length - 3);
   let ramp = Math.max(95, base - growth * 1.4);
   if (isRageMode()) ramp -= RAGE_SPEED_BONUS_MS;
@@ -655,6 +706,7 @@ function resetGame() {
   ragePopup.hidden = true;
   document.body.classList.remove("rage-mode");
   lastFoodKey = null;
+  bodyFrameIndex = 0;
   paused = false;
   gameStarted = true;
   pauseButton.textContent = "Pause";
@@ -664,11 +716,8 @@ function resetGame() {
   drawGrid();
 }
 
-function updateDifficultyButtons() {
-  if (difficultyCurrent) {
-    difficultyCurrent.textContent = "Global scoreboard";
-    top5Title.textContent = "Top 5 Global";
-  }
+function updateMenuLabels() {
+  top5Title.textContent = "Top 5 Global";
   renderHighscores();
 }
 
@@ -947,7 +996,7 @@ document.addEventListener("keydown", handleKey);
 
 updateScore();
 updateAudioButton();
-updateDifficultyButtons();
+updateMenuLabels();
 initHighscores();
 fitCanvasToViewport();
 drawGrid();

@@ -25,9 +25,18 @@ Then open:
 ## Gameplay Notes
 
 - Walls are wrap-around (no wall collisions).
-- Difficulty selection is disabled (game always uses easy baseline pacing).
-- Start speed is now noticeably slower, then increases gradually as snake length grows.
-- Snake body rendering keeps grid alignment, trims transparent texture padding, and uses dual-pass fur patterning for smoother continuity.
+- Single game mode: no difficulty selector.
+- Start speed is noticeably slower, then increases gradually as snake length grows.
+- Snake body uses 4 walk-cycle frames that animate with movement speed.
+- Body rendering keeps grid alignment, applies one shared trim box across walk frames, and uses dual-pass fur patterning for smoother continuity.
+
+### Body Animation Assets
+
+- `assets/snake-body-walk-1.png`
+- `assets/snake-body-walk-2.png`
+- `assets/snake-body-walk-3.png`
+- `assets/snake-body-walk-4.png`
+- Fallback if walk frames are missing: `assets/snake-body.png`
 
 ### Lulu-Rage
 
