@@ -602,7 +602,7 @@ function drawGrid() {
     return { dx, dy };
   };
 
-  const getSegmentAngle = (index) => {
+  const getSegmentDirection = (index) => {
     const current = state.snake[index];
     const prev = state.snake[index - 1];
     let { dx, dy } = getWrappedUnitDelta(current, prev);
@@ -613,10 +613,20 @@ function drawGrid() {
       dy *= -1;
     }
 
-    if (Math.abs(dx) >= Math.abs(dy)) {
-      return dx >= 0 ? 0 : Math.PI;
+    return { dx, dy };
+  };
+
+  const applyDirectionalTransform = ({ dx, dy }) => {
+    let rotation = 0;
+    let scaleX = 1;
+    if (Math.abs(dy) > Math.abs(dx)) {
+      rotation = dy >= 0 ? Math.PI / 2 : -Math.PI / 2;
+    } else if (dx < 0) {
+      // Mirror for leftward movement to keep sprites upright instead of upside down.
+      scaleX = -1;
     }
-    return dy >= 0 ? Math.PI / 2 : -Math.PI / 2;
+    ctx.rotate(rotation);
+    if (scaleX < 0) ctx.scale(scaleX, 1);
   };
 
   const drawFallbackBodySegment = () => {
@@ -634,12 +644,12 @@ function drawGrid() {
     ctx.fill();
   };
 
-  const drawBodySegmentAt = (cell, angle) => {
+  const drawBodySegmentAt = (cell, direction) => {
     const cx = cell.x * size + size / 2;
     const cy = cell.y * size + size / 2;
     ctx.save();
     ctx.translate(cx, cy);
-    ctx.rotate(angle);
+    applyDirectionalTransform(direction);
     if (bodyTextureReady) {
       ctx.drawImage(activeBodyTexture, -bodyLength / 2, -bodyThickness / 2, bodyLength, bodyThickness);
     } else {
@@ -649,7 +659,7 @@ function drawGrid() {
   };
 
   for (let i = state.snake.length - 1; i >= 1; i -= 1) {
-    drawBodySegmentAt(state.snake[i], getSegmentAngle(i));
+    drawBodySegmentAt(state.snake[i], getSegmentDirection(i));
   }
 
   const headImg = images.head;
@@ -657,15 +667,9 @@ function drawGrid() {
     const head = state.snake[0];
     const centerX = head.x * size + size / 2;
     const centerY = head.y * size + size / 2;
-    let rotation = 0;
-    if (state.dir.x === 1) rotation = 0;
-    if (state.dir.x === -1) rotation = Math.PI;
-    if (state.dir.y === -1) rotation = -Math.PI / 2;
-    if (state.dir.y === 1) rotation = Math.PI / 2;
-
     ctx.save();
     ctx.translate(centerX, centerY);
-    ctx.rotate(rotation);
+    applyDirectionalTransform(state.dir);
     ctx.drawImage(headImg, -headSize / 2, -headSize / 2, headSize, headSize);
     ctx.restore();
   }

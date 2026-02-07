@@ -30,6 +30,7 @@ Then open:
 - Snake body uses 4 walk-cycle frames that animate with movement speed.
 - Body rendering now draws one oriented sprite per snake segment (instead of texture-stroked lines) for cleaner continuity in turns and wraps.
 - A shared trim box is applied across walk frames to keep frame alignment stable.
+- Leftward movement now uses sprite mirroring (instead of 180-degree rotation) so head/body stay upright.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 
 ### Body Animation Assets
