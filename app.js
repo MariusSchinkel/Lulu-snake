@@ -579,103 +579,78 @@ function drawGrid() {
   }
 
   const headSize = size * 1.32;
-  const strokeWidth = Math.max(2, Math.round(headSize * 0.95));
+  const bodyLength = size * 1.65;
+  const bodyThickness = size * 1.14;
   const activeBodyTexture =
     images.bodyFrames.length > 0 ? images.bodyFrames[bodyFrameIndex % images.bodyFrames.length] : null;
-
-  const collectBodyLines = () => {
-    const lines = [];
-    for (let i = 0; i < state.snake.length - 1; i += 1) {
-      const a = state.snake[i];
-      const b = state.snake[i + 1];
-      const ax = a.x * size + size / 2;
-      const ay = a.y * size + size / 2;
-      const bx = b.x * size + size / 2;
-      const by = b.y * size + size / 2;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-
-      if (!state.wallsEnabled && (Math.abs(dx) > 1 || Math.abs(dy) > 1)) {
-        if (Math.abs(dx) > 1) {
-          const leftEdge = 0;
-          const rightEdge = state.gridSize * size;
-          if (dx > 1) {
-            lines.push([ax, ay, leftEdge, ay]);
-            lines.push([rightEdge, by, bx, by]);
-          } else {
-            lines.push([ax, ay, rightEdge, ay]);
-            lines.push([leftEdge, by, bx, by]);
-          }
-        } else {
-          const topEdge = 0;
-          const bottomEdge = state.gridSize * size;
-          if (dy > 1) {
-            lines.push([ax, ay, ax, topEdge]);
-            lines.push([bx, bottomEdge, bx, by]);
-          } else {
-            lines.push([ax, ay, ax, bottomEdge]);
-            lines.push([bx, topEdge, bx, by]);
-          }
-        }
-      } else {
-        lines.push([ax, ay, bx, by]);
-      }
-    }
-    return lines;
-  };
-
-  const bodyLines = collectBodyLines();
-
-  const drawBodyPath = () => {
-    ctx.beginPath();
-    let penX = null;
-    let penY = null;
-    bodyLines.forEach(([x1, y1, x2, y2]) => {
-      if (penX !== x1 || penY !== y1) {
-        ctx.moveTo(x1, y1);
-      }
-      ctx.lineTo(x2, y2);
-      penX = x2;
-      penY = y2;
-    });
-  };
-
-  ctx.save();
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.lineWidth = strokeWidth;
   const bodyTextureReady =
     activeBodyTexture &&
     (activeBodyTexture instanceof HTMLCanvasElement || activeBodyTexture.complete === true);
-  if (bodyTextureReady) {
-    const scale = strokeWidth / activeBodyTexture.height;
-    const drawBodyPatternPass = (offsetX, offsetY, alpha) => {
-      const pattern = ctx.createPattern(activeBodyTexture, "repeat");
-      if (!pattern) return false;
-      if (typeof pattern.setTransform !== "function" || typeof DOMMatrix !== "function") return false;
-      // Scale by source height so one body frame has a readable in-game size.
-      pattern.setTransform(new DOMMatrix([scale, 0, 0, scale, offsetX, offsetY]));
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = pattern;
-      drawBodyPath();
-      ctx.stroke();
-      return true;
-    };
 
-    const didDraw = drawBodyPatternPass(0, 0, 1);
-    if (!didDraw) {
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = "#d9ab63";
-      drawBodyPath();
-      ctx.stroke();
+  const getWrappedUnitDelta = (from, to) => {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    if (!state.wallsEnabled) {
+      const half = state.gridSize / 2;
+      if (dx > half) dx -= state.gridSize;
+      if (dx < -half) dx += state.gridSize;
+      if (dy > half) dy -= state.gridSize;
+      if (dy < -half) dy += state.gridSize;
     }
-  } else {
-    ctx.strokeStyle = "#c9954a";
-    drawBodyPath();
-    ctx.stroke();
+    if (dx !== 0) dx = dx > 0 ? 1 : -1;
+    if (dy !== 0) dy = dy > 0 ? 1 : -1;
+    return { dx, dy };
+  };
+
+  const getSegmentAngle = (index) => {
+    const current = state.snake[index];
+    const prev = state.snake[index - 1];
+    let { dx, dy } = getWrappedUnitDelta(current, prev);
+
+    if (dx === 0 && dy === 0 && index + 1 < state.snake.length) {
+      ({ dx, dy } = getWrappedUnitDelta(current, state.snake[index + 1]));
+      dx *= -1;
+      dy *= -1;
+    }
+
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx >= 0 ? 0 : Math.PI;
+    }
+    return dy >= 0 ? Math.PI / 2 : -Math.PI / 2;
+  };
+
+  const drawFallbackBodySegment = () => {
+    const halfLen = bodyLength / 2;
+    const halfThick = bodyThickness / 2;
+    const r = halfThick;
+    ctx.beginPath();
+    ctx.moveTo(-halfLen + r, -halfThick);
+    ctx.lineTo(halfLen - r, -halfThick);
+    ctx.arc(halfLen - r, 0, r, -Math.PI / 2, Math.PI / 2);
+    ctx.lineTo(-halfLen + r, halfThick);
+    ctx.arc(-halfLen + r, 0, r, Math.PI / 2, -Math.PI / 2);
+    ctx.closePath();
+    ctx.fillStyle = "#d9ab63";
+    ctx.fill();
+  };
+
+  const drawBodySegmentAt = (cell, angle) => {
+    const cx = cell.x * size + size / 2;
+    const cy = cell.y * size + size / 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(angle);
+    if (bodyTextureReady) {
+      ctx.drawImage(activeBodyTexture, -bodyLength / 2, -bodyThickness / 2, bodyLength, bodyThickness);
+    } else {
+      drawFallbackBodySegment();
+    }
+    ctx.restore();
+  };
+
+  for (let i = state.snake.length - 1; i >= 1; i -= 1) {
+    drawBodySegmentAt(state.snake[i], getSegmentAngle(i));
   }
-  ctx.globalAlpha = 1;
-  ctx.restore();
 
   const headImg = images.head;
   if (headImg && headImg.complete) {

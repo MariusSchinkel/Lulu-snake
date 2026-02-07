@@ -28,7 +28,8 @@ Then open:
 - Single game mode: no difficulty selector.
 - Start speed is noticeably slower, then increases gradually as snake length grows.
 - Snake body uses 4 walk-cycle frames that animate with movement speed.
-- Body rendering keeps grid alignment, applies one shared trim box across walk frames, and scales frames to body thickness for cleaner continuity.
+- Body rendering now draws one oriented sprite per snake segment (instead of texture-stroked lines) for cleaner continuity in turns and wraps.
+- A shared trim box is applied across walk frames to keep frame alignment stable.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 
 ### Body Animation Assets
