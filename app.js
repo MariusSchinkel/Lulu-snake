@@ -15,7 +15,6 @@ const nameEntry = document.getElementById("name-entry");
 const nameEntryInput = document.getElementById("name-entry-input");
 const saveScoreButton = document.getElementById("save-score");
 const startGameButton = document.getElementById("start-game");
-const difficultyButtons = document.querySelectorAll("[data-difficulty]");
 const ragePopup = document.getElementById("rage-popup");
 const audioToggle = document.getElementById("audio-toggle");
 const pauseButton = document.getElementById("pause");
@@ -24,12 +23,16 @@ const controlButtons = document.querySelectorAll("[data-dir]");
 const shellEl = document.querySelector(".shell");
 const topbarEl = document.querySelector(".topbar");
 const controlsEl = document.querySelector(".controls");
-const stageEl = document.querySelector(".stage");
 
 const CELL_COUNT = 20;
 const LAST_NAME_KEY = "lulu-snake-last-name";
-const HIGHSCORE_KEY = "lulu-snake-highscores-by-difficulty";
+const HIGHSCORE_CACHE_KEY = "lulu-snake-highscores-cache-v2";
 const AUDIO_MUTED_KEY = "lulu-snake-audio-muted";
+const SUPABASE_URL = "https://tctrtklwqmynkfssipgc.supabase.co";
+const SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRjdHJ0a2x3cW15bmtmc3NpcGdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0NjU0MTAsImV4cCI6MjA4NjA0MTQxMH0.Hi640Ia4HN4Unjvay5hZ91yTrZUB9DVRLXushyMuh_w";
+const SUPABASE_TABLE = "lulu_scores";
+const MAX_HIGHSCORES = 5;
 const RAGE_DURATION_MS = 15000;
 const RAGE_POPUP_MS = 4200;
 const RAGE_CHANCE_PCT = 7;
@@ -52,9 +55,9 @@ let timerId = null;
 let images = { head: null, body: null, treats: [] };
 let lastFoodKey = null;
 let currentTreatIndex = 0;
-const selectedDifficulty = "easy";
 let gameStarted = false;
 let pendingHighscore = null;
+let highscores = [];
 let rageTreatActive = false;
 let rageRemainingMs = 0;
 let rageLastUpdateTs = 0;
@@ -81,6 +84,119 @@ function updateAudioButton() {
   if (!audioToggle) return;
   audioToggle.textContent = audioMuted ? "Audio Off" : "Audio On";
   audioToggle.setAttribute("aria-pressed", String(!audioMuted));
+}
+
+function normalizeName(rawName) {
+  const trimmed = String(rawName || "").trim();
+  return trimmed || "Player 1";
+}
+
+function sortHighscores(entries) {
+  return [...entries]
+    .sort((a, b) => b.score - a.score || a.createdAt - b.createdAt)
+    .slice(0, MAX_HIGHSCORES);
+}
+
+function readHighscoreCache() {
+  try {
+    const raw = localStorage.getItem(HIGHSCORE_CACHE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return sortHighscores(
+      parsed.map((entry) => ({
+        id: String(entry.id || ""),
+        name: normalizeName(entry.name),
+        score: Math.max(0, Number(entry.score) || 0),
+        createdAt: Number(entry.createdAt) || Date.now(),
+      }))
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveHighscoreCache(nextScores) {
+  localStorage.setItem(HIGHSCORE_CACHE_KEY, JSON.stringify(sortHighscores(nextScores)));
+}
+
+function applyHighscores(nextScores) {
+  highscores = sortHighscores(nextScores);
+  saveHighscoreCache(highscores);
+}
+
+function supabaseHeaders(extra = {}) {
+  return {
+    apikey: SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+    ...extra,
+  };
+}
+
+function normalizeRemoteRow(row) {
+  return {
+    id: String(row.id),
+    name: normalizeName(row.name),
+    score: Math.max(0, Number(row.score) || 0),
+    createdAt: Date.parse(row.created_at) || Date.now(),
+  };
+}
+
+async function fetchTopHighscoresFromServer() {
+  const params = new URLSearchParams();
+  params.set("select", "id,name,score,created_at");
+  params.set("order", "score.desc,created_at.asc");
+  params.set("limit", String(MAX_HIGHSCORES));
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?${params.toString()}`, {
+    headers: supabaseHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to fetch highscores (${response.status})`);
+  }
+  const rows = await response.json();
+  return sortHighscores(rows.map(normalizeRemoteRow));
+}
+
+async function insertHighscoreOnServer(name, score) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+    method: "POST",
+    headers: supabaseHeaders({
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      name: normalizeName(name),
+      score: Math.max(0, Math.floor(score)),
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to insert highscore (${response.status})`);
+  }
+  const rows = await response.json();
+  return rows[0] ? normalizeRemoteRow(rows[0]) : null;
+}
+
+async function updateHighscoreNameOnServer(id, name) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: supabaseHeaders({
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({ name: normalizeName(name) }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update highscore name (${response.status})`);
+  }
+}
+
+async function refreshHighscoresFromServer() {
+  try {
+    const remoteScores = await fetchTopHighscoresFromServer();
+    applyHighscores(remoteScores);
+    renderHighscores();
+  } catch (error) {
+    console.warn("Unable to refresh highscores from Supabase.", error);
+  }
 }
 
 function loadImage(src) {
@@ -407,7 +523,7 @@ function tick() {
     assignFoodStyle();
   }
   if (wasAlive && !state.alive) {
-    handleGameOver(state.score, selectedDifficulty);
+    handleGameOver(state.score);
     openMenu("gameover");
   }
   drawGrid();
@@ -482,8 +598,8 @@ function resetGame() {
 
 function updateDifficultyButtons() {
   if (difficultyCurrent) {
-    difficultyCurrent.textContent = "Selected: Easy";
-    top5Title.textContent = "Top 5";
+    difficultyCurrent.textContent = "Global scoreboard";
+    top5Title.textContent = "Top 5 Global";
   }
   renderHighscores();
 }
@@ -494,45 +610,27 @@ function getStoredName() {
 }
 
 function saveLastName(rawName) {
-  const raw = rawName.trim();
-  const name = raw || "Player 1";
+  const name = normalizeName(rawName);
   localStorage.setItem(LAST_NAME_KEY, name);
   return name;
 }
 
-function loadHighscores() {
-  try {
-    const raw = localStorage.getItem(HIGHSCORE_KEY);
-    const parsed = raw ? JSON.parse(raw) : {};
-    return {
-      easy: Array.isArray(parsed.easy) ? parsed.easy : [],
-      medium: Array.isArray(parsed.medium) ? parsed.medium : [],
-      hard: Array.isArray(parsed.hard) ? parsed.hard : [],
-    };
-  } catch {
-    return { easy: [], medium: [], hard: [] };
+function updateHighscoreName(id, rawName) {
+  const idx = highscores.findIndex((entry) => entry.id === id);
+  if (idx < 0) return;
+  const normalized = normalizeName(rawName);
+  highscores[idx] = { ...highscores[idx], name: normalized };
+  applyHighscores(highscores);
+  saveLastName(normalized);
+  if (!id.startsWith("local-")) {
+    updateHighscoreNameOnServer(id, normalized).catch((error) => {
+      console.warn("Unable to sync highscore name update.", error);
+    });
   }
 }
 
-function saveHighscores(scoresByDifficulty) {
-  localStorage.setItem(HIGHSCORE_KEY, JSON.stringify(scoresByDifficulty));
-}
-
-function updateHighscoreName(difficulty, id, rawName) {
-  const scoresByDifficulty = loadHighscores();
-  const scores = scoresByDifficulty[difficulty] || [];
-  const idx = scores.findIndex((entry) => entry.id === id);
-  if (idx < 0) return;
-  const normalized = (rawName || "").trim() || "Player 1";
-  scores[idx].name = normalized;
-  scoresByDifficulty[difficulty] = scores;
-  saveHighscores(scoresByDifficulty);
-  saveLastName(normalized);
-}
-
 function renderHighscores() {
-  const scoresByDifficulty = loadHighscores();
-  const scores = scoresByDifficulty[selectedDifficulty] || [];
+  const scores = highscores;
   menuHighscoreList.innerHTML = "";
   if (scores.length === 0) {
     const li = document.createElement("li");
@@ -550,12 +648,12 @@ function renderHighscores() {
       input.className = "score-name-input";
       input.value = entry.name || "Player 1";
       input.addEventListener("input", () => {
-        updateHighscoreName(selectedDifficulty, entry.id, input.value);
+        updateHighscoreName(entry.id, input.value);
       });
       input.addEventListener("blur", () => {
-        const normalized = (input.value || "").trim() || "Player 1";
+        const normalized = normalizeName(input.value);
         input.value = normalized;
-        updateHighscoreName(selectedDifficulty, entry.id, normalized);
+        updateHighscoreName(entry.id, normalized);
       });
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
@@ -574,37 +672,56 @@ function renderHighscores() {
   });
 }
 
-function isTopFiveScore(score, difficulty) {
+function isTopFiveScore(score) {
   if (score <= 0) return false;
-  const scoresByDifficulty = loadHighscores();
-  const scores = scoresByDifficulty[difficulty] || [];
-  if (scores.length < 5) return true;
-  const cutoff = scores[4].score;
+  if (highscores.length < MAX_HIGHSCORES) return true;
+  const cutoff = highscores[MAX_HIGHSCORES - 1].score;
   return score >= cutoff;
 }
 
-function recordHighscore(score, rawName, difficulty) {
+function recordHighscore(score, rawName) {
   if (score <= 0) return null;
   const name = saveLastName(rawName);
-  const scoresByDifficulty = loadHighscores();
-  const scores = scoresByDifficulty[difficulty] || [];
   const entry = {
-    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     name,
     score,
     createdAt: Date.now(),
   };
-  scores.push(entry);
-  scores.sort((a, b) => b.score - a.score || a.createdAt - b.createdAt);
-  scoresByDifficulty[difficulty] = scores.slice(0, 5);
-  saveHighscores(scoresByDifficulty);
-  const idx = scoresByDifficulty[difficulty].findIndex((item) => item.id === entry.id);
-  return idx >= 0 ? { id: entry.id, difficulty } : null;
+  const nextScores = sortHighscores([...highscores, entry]);
+  const idx = nextScores.findIndex((item) => item.id === entry.id);
+  if (idx < 0) return null;
+  applyHighscores(nextScores);
+
+  void (async () => {
+    try {
+      const currentEntry = highscores.find((item) => item.id === entry.id) || entry;
+      const remoteEntry = await insertHighscoreOnServer(currentEntry.name, currentEntry.score);
+      if (!remoteEntry) return;
+      const latestLocalEntry = highscores.find((item) => item.id === entry.id) || currentEntry;
+      const localName = normalizeName(latestLocalEntry.name);
+      const merged = highscores.filter((item) => item.id !== entry.id);
+      merged.push({ ...remoteEntry, name: localName });
+      applyHighscores(merged);
+      if (pendingHighscore?.id === entry.id) {
+        pendingHighscore = { id: remoteEntry.id };
+      }
+      renderHighscores();
+      if (localName !== remoteEntry.name) {
+        await updateHighscoreNameOnServer(remoteEntry.id, localName);
+      }
+      await refreshHighscoresFromServer();
+    } catch (error) {
+      console.warn("Unable to sync highscore with Supabase.", error);
+    }
+  })();
+
+  return { id: entry.id };
 }
 
-function handleGameOver(score, difficulty) {
-  if (isTopFiveScore(score, difficulty)) {
-    pendingHighscore = recordHighscore(score, getStoredName(), difficulty);
+function handleGameOver(score) {
+  if (isTopFiveScore(score)) {
+    pendingHighscore = recordHighscore(score, getStoredName());
     nameEntry.hidden = true;
   } else {
     pendingHighscore = null;
@@ -613,12 +730,19 @@ function handleGameOver(score, difficulty) {
   renderHighscores();
 }
 
+function initHighscores() {
+  highscores = readHighscoreCache();
+  renderHighscores();
+  void refreshHighscoresFromServer();
+}
+
 function openMenu(mode) {
   gameStarted = false;
   paused = true;
   pauseButton.textContent = "Pause";
   overlay.hidden = false;
   renderHighscores();
+  void refreshHighscoresFromServer();
   if (mode === "gameover") {
     menuTitle.textContent = "Game Over";
     menuText.textContent = `Score: ${state.score}. Press Play Again.`;
@@ -722,7 +846,7 @@ document.addEventListener("keydown", handleKey);
 updateScore();
 updateAudioButton();
 updateDifficultyButtons();
-renderHighscores();
+initHighscores();
 fitCanvasToViewport();
 drawGrid();
 openMenu("start");
