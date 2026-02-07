@@ -57,6 +57,8 @@ let gameStarted = false;
 let pendingHighscore = null;
 let highscores = [];
 let rageTreatActive = false;
+let rageTreatReady = false;
+let rageRunner = null;
 let rageRemainingMs = 0;
 let rageLastUpdateTs = 0;
 let ragePauseTimer = null;
@@ -72,6 +74,7 @@ let rageFadeRaf = null;
 let swipePointerId = null;
 let swipeLastX = 0;
 let swipeLastY = 0;
+const HIDDEN_FOOD = { x: -9999, y: -9999 };
 
 const bgMusic = new Audio("./assets/bg-music.mp3");
 bgMusic.loop = true;
@@ -562,6 +565,34 @@ function normalizeBodyFrames(frames) {
   return frames.map((frame) => createTrimmedBodyTexture(frame, sharedBounds));
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function createRageRunner(targetCell, gridSize) {
+  const fromLeft = (Date.now() & 1) === 0;
+  const offsetY = ((Date.now() >>> 2) % 5) - 2;
+  const startY = clamp(targetCell.y + offsetY, 1, gridSize - 2);
+  const startX = fromLeft ? -1.4 : gridSize + 1.4;
+  const endX = targetCell.x + (fromLeft ? -0.55 : 0.55);
+  const endY = targetCell.y + 0.08;
+  return {
+    fromLeft,
+    startX,
+    startY,
+    endX,
+    endY,
+    startTs: performance.now(),
+    durationMs: 1150,
+  };
+}
+
+function startRageTreatSequence() {
+  rageTreatActive = true;
+  rageTreatReady = false;
+  rageRunner = createRageRunner(state.food, state.gridSize);
+}
+
 function drawGrid() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const size = canvas.width / state.gridSize;
@@ -587,6 +618,29 @@ function drawGrid() {
     ctx.fillRect(cell.x * size + 1, cell.y * size + 1, size - 2, size - 2);
   };
 
+  const drawPeeTreatAt = (cell, boosted = false) => {
+    const cx = cell.x * size + size / 2;
+    const cy = cell.y * size + size / 2;
+    const r = size * (boosted ? 0.56 : 0.5);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((cell.x * 13 + cell.y * 7) * 0.07);
+    const gradient = ctx.createRadialGradient(-r * 0.25, -r * 0.3, r * 0.08, 0, 0, r);
+    gradient.addColorStop(0, boosted ? "#fff8a6" : "#ffe682");
+    gradient.addColorStop(0.55, boosted ? "#ffd947" : "#f4ca3e");
+    gradient.addColorStop(1, boosted ? "#d49f11" : "#bb840a");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 1.08, r * 0.7, 0, 0, Math.PI * 2);
+    ctx.ellipse(r * 0.35, -r * 0.08, r * 0.45, r * 0.32, 0, 0, Math.PI * 2);
+    ctx.ellipse(-r * 0.3, r * 0.12, r * 0.36, r * 0.26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(120, 82, 10, 0.45)";
+    ctx.stroke();
+    ctx.restore();
+  };
+
   const foodKey = `${state.food.x},${state.food.y}`;
   if (foodKey !== lastFoodKey) {
     lastFoodKey = foodKey;
@@ -596,25 +650,15 @@ function drawGrid() {
   }
 
   const treatImage = images.treats[currentTreatIndex];
-  if (rageTreatActive) {
-    const cx = state.food.x * size + size / 2;
-    const cy = state.food.y * size + size / 2;
-    const radius = size * 0.55;
-    const gradient = ctx.createConicGradient(0, cx, cy);
-    gradient.addColorStop(0, "#ff2d95");
-    gradient.addColorStop(0.17, "#ff8a00");
-    gradient.addColorStop(0.34, "#ffe600");
-    gradient.addColorStop(0.51, "#20d97d");
-    gradient.addColorStop(0.68, "#2f7cff");
-    gradient.addColorStop(0.85, "#8f4dff");
-    gradient.addColorStop(1, "#ff2d95");
+  const rageStyleTreat = isRageMode() || (rageTreatActive && rageTreatReady);
+  if (rageStyleTreat) {
+    drawPeeTreatAt(state.food, true);
+  } else if (rageTreatActive && !rageTreatReady) {
     ctx.save();
-    ctx.fillStyle = gradient;
+    ctx.strokeStyle = "rgba(255, 240, 165, 0.9)";
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#fff7d6";
+    ctx.arc(state.food.x * size + size / 2, state.food.y * size + size / 2, size * 0.38, 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
   } else if (treatImage && treatImage.complete) {
@@ -629,6 +673,45 @@ function drawGrid() {
     );
   } else {
     drawFallbackCell(state.food, "#f97316");
+  }
+
+  if (rageTreatActive && !rageTreatReady && rageRunner) {
+    const elapsed = performance.now() - rageRunner.startTs;
+    const t = Math.min(1, elapsed / rageRunner.durationMs);
+    const x = rageRunner.startX + (rageRunner.endX - rageRunner.startX) * t;
+    const y = rageRunner.startY + (rageRunner.endY - rageRunner.startY) * t;
+    const runnerSize = size * 1.34;
+
+    if (images.head && images.head.complete) {
+      ctx.save();
+      ctx.translate(x * size + size / 2, y * size + size / 2);
+      if (!rageRunner.fromLeft) ctx.scale(-1, 1);
+      ctx.drawImage(images.head, -runnerSize / 2, -runnerSize / 2, runnerSize, runnerSize);
+      ctx.restore();
+    } else {
+      drawFallbackCell({ x: Math.floor(x), y: Math.floor(y) }, "#f5d07f");
+    }
+
+    if (t > 0.8) {
+      const peeT = (t - 0.8) / 0.2;
+      const sx = x * size + size / 2;
+      const sy = y * size + size * 0.2;
+      const tx = state.food.x * size + size / 2;
+      const ty = state.food.y * size + size / 2;
+      ctx.save();
+      ctx.strokeStyle = `rgba(248, 214, 72, ${0.55 * peeT})`;
+      ctx.lineWidth = Math.max(2, size * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(tx, ty);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (t >= 1) {
+      rageTreatReady = true;
+      rageRunner = null;
+    }
   }
 
   const headSize = size * 1.32;
@@ -772,8 +855,15 @@ function tick() {
   }
   const wasAlive = state.alive;
   const prevScore = state.score;
-  const ateRageTreat = rageTreatActive;
-  state = stepGame(state);
+  const ateRageTreat = rageTreatActive && rageTreatReady;
+  if (rageTreatActive && !rageTreatReady) {
+    const visibleFood = state.food;
+    const visibleSeed = state.rngSeed;
+    const stepped = stepGame({ ...state, food: HIDDEN_FOOD });
+    state = { ...stepped, food: visibleFood, rngSeed: visibleSeed };
+  } else {
+    state = stepGame(state);
+  }
   advanceBodyWalkFrame();
   const gained = state.score - prevScore;
   if (gained > 0 && ateRageTreat && gained < 2) {
@@ -856,6 +946,9 @@ function resetGame() {
   });
   state = { ...state, pointsPerFood: 1 };
   treatsSinceRage = 0;
+  rageTreatActive = false;
+  rageTreatReady = false;
+  rageRunner = null;
   rageRemainingMs = 0;
   rageLastUpdateTs = Date.now();
   clearTimeout(ragePauseTimer);
@@ -1183,10 +1276,18 @@ function assignFoodStyle() {
   }
   if (isRageMode()) {
     rageTreatActive = false;
+    rageTreatReady = false;
+    rageRunner = null;
     return;
   }
   const forceRage = treatsSinceRage >= FORCE_RAGE_AFTER_TREATS;
-  rageTreatActive = forceRage || state.rngSeed % 100 < RAGE_CHANCE_PCT;
+  if (forceRage || state.rngSeed % 100 < RAGE_CHANCE_PCT) {
+    startRageTreatSequence();
+  } else {
+    rageTreatActive = false;
+    rageTreatReady = false;
+    rageRunner = null;
+  }
 }
 
 function isRageMode() {

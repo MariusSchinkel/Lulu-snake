@@ -37,6 +37,8 @@ Then open:
 - Swipe threshold is lower on mobile screens for quicker touch direction changes.
 - Rage audio now primes `lulu-rage.mp3` on user gesture and retries during active rage if a mobile autoplay block occurs.
 - During Lulu-Rage, background music is paused and resumes after rage ends to avoid overlapping tracks.
+- Rage trigger now uses a run-in dog event: a dog enters, pees on the board, and only then the special pee treat becomes edible.
+- During Lulu-Rage, all food is rendered as dog-pee style treats.
 
 ### Body Animation Assets
 
