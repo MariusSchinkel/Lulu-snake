@@ -7,6 +7,9 @@
   --muted: #7b6244;
   --accent: #bf8b35;
   --danger: #8a2f2f;
+  --rage-1: #ff2e88;
+  --rage-2: #ff8a00;
+  --rage-3: #fff24f;
 }
 
 * {
@@ -55,19 +58,59 @@ body::before {
   z-index: 0;
 }
 
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 18% 20%, rgba(255, 88, 151, 0.35) 0, rgba(255, 88, 151, 0) 42%),
+    radial-gradient(circle at 80% 78%, rgba(255, 161, 45, 0.3) 0, rgba(255, 161, 45, 0) 46%),
+    repeating-linear-gradient(
+      -20deg,
+      rgba(255, 255, 255, 0.08) 0 6px,
+      rgba(255, 255, 255, 0) 6px 20px
+    );
+  mix-blend-mode: screen;
+}
+
 body.rage-mode {
-  animation: rage-screen 1.2s linear infinite;
+  animation: rage-screen 0.55s linear infinite;
+}
+
+body.rage-mode::after {
+  opacity: 1;
+  animation: rage-overlay 0.42s steps(2) infinite;
 }
 
 @keyframes rage-screen {
   0% {
-    filter: hue-rotate(0deg) saturate(1.05) contrast(1.02);
+    filter: hue-rotate(0deg) saturate(1.15) contrast(1.05);
+  }
+  25% {
+    filter: hue-rotate(20deg) saturate(1.5) contrast(1.18);
   }
   50% {
-    filter: hue-rotate(70deg) saturate(1.35) contrast(1.1);
+    filter: hue-rotate(55deg) saturate(1.75) contrast(1.26);
+  }
+  75% {
+    filter: hue-rotate(32deg) saturate(1.55) contrast(1.19);
   }
   100% {
-    filter: hue-rotate(0deg) saturate(1.05) contrast(1.02);
+    filter: hue-rotate(0deg) saturate(1.15) contrast(1.05);
+  }
+}
+
+@keyframes rage-overlay {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0.45;
+  }
+  100% {
+    transform: translate3d(-4px, 3px, 0);
+    opacity: 0.82;
   }
 }
 
@@ -129,10 +172,43 @@ body.rage-mode {
   border-radius: 8px;
 }
 
-.title h1 {
+.game-title {
   margin: 0 0 6px 0;
-  font-size: 28px;
-  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 8px 10px;
+  border-radius: 999px;
+  border: 1px solid #7f541f;
+  background: linear-gradient(125deg, #ffe6b8 0%, #ebb15e 42%, #cd8f3e 100%);
+  box-shadow: 0 7px 16px rgba(92, 53, 14, 0.34), inset 0 1px 0 rgba(255, 248, 225, 0.75);
+  letter-spacing: 0.03em;
+  line-height: 1;
+}
+
+.game-title span {
+  display: inline-block;
+  text-transform: uppercase;
+  font-weight: 900;
+  font-size: 24px;
+  color: #fff7e7;
+  text-shadow:
+    0 1px 0 rgba(76, 43, 12, 0.9),
+    0 2px 0 rgba(76, 43, 12, 0.82),
+    0 3px 0 rgba(76, 43, 12, 0.72),
+    0 4px 8px rgba(44, 22, 5, 0.4);
+}
+
+.game-title span:first-child {
+  color: #6d3d08;
+  background: linear-gradient(180deg, #fff6de 0%, #ffd786 80%);
+  border-radius: 999px;
+  padding: 2px 8px 3px;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65), 0 2px 3px rgba(87, 55, 16, 0.3);
+}
+
+.game-title span:last-child {
+  padding-right: 3px;
 }
 
 .title p {
@@ -185,6 +261,23 @@ body.rage-mode {
   opacity: 0.18;
 }
 
+.stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 16% 18%, rgba(255, 74, 152, 0.35) 0, rgba(255, 74, 152, 0) 46%),
+    radial-gradient(circle at 78% 82%, rgba(255, 150, 43, 0.35) 0, rgba(255, 150, 43, 0) 44%),
+    repeating-linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.1) 0 2px,
+      rgba(255, 255, 255, 0) 2px 8px
+    );
+}
+
 canvas {
   width: 100%;
   height: 100%;
@@ -197,6 +290,87 @@ canvas {
   position: relative;
   z-index: 1;
   touch-action: none;
+}
+
+body.rage-mode .shell {
+  border-color: #a1451c;
+  box-shadow:
+    0 0 0 2px rgba(255, 170, 66, 0.65),
+    0 22px 42px rgba(115, 30, 10, 0.4),
+    0 0 48px rgba(255, 66, 157, 0.26);
+  animation: rage-shell 0.24s steps(2) infinite;
+}
+
+body.rage-mode .stage {
+  border-color: #9c3219;
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 246, 191, 0.45),
+    0 0 0 2px rgba(255, 102, 163, 0.26);
+}
+
+body.rage-mode .stage::after {
+  opacity: 0.72;
+  animation: rage-scan 0.32s linear infinite;
+}
+
+body.rage-mode canvas {
+  filter: saturate(1.42) contrast(1.18) brightness(1.06);
+}
+
+body.rage-mode .rage-indicator {
+  animation: rage-indicator-pulse 0.35s ease-in-out infinite alternate;
+  box-shadow:
+    0 0 0 2px rgba(255, 246, 191, 0.64),
+    0 0 26px rgba(255, 51, 166, 0.58);
+}
+
+body.rage-mode .game-title {
+  border-color: #8b2f14;
+  background: linear-gradient(120deg, var(--rage-1) 0%, var(--rage-2) 48%, var(--rage-3) 100%);
+  animation: rage-title 0.26s steps(2) infinite;
+}
+
+body.rage-mode .game-title span {
+  color: #fff;
+}
+
+@keyframes rage-shell {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-1px, 1px, 0);
+  }
+  100% {
+    transform: translate3d(1px, -1px, 0);
+  }
+}
+
+@keyframes rage-scan {
+  0% {
+    background-position: 0 0, 0 0, 0 0;
+  }
+  100% {
+    background-position: 8px -8px, -8px 8px, 0 14px;
+  }
+}
+
+@keyframes rage-indicator-pulse {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.06);
+  }
+}
+
+@keyframes rage-title {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(1px, -1px, 0);
+  }
 }
 
 .overlay {
@@ -457,8 +631,16 @@ button:active {
   }
 
   .title h1 {
-    font-size: 22px;
     margin-bottom: 2px;
+  }
+
+  .game-title {
+    padding: 5px 10px 7px 9px;
+    gap: 4px;
+  }
+
+  .game-title span {
+    font-size: 18px;
   }
 
   .title p {

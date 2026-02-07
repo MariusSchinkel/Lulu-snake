@@ -17,9 +17,9 @@ Then open:
 ## Controls
 
 - `Arrow keys` or `WASD`: move
+- `Swipe anywhere on screen` (touch/pen): move
 - `Space`: pause/resume
 - `R`: restart
-- On-screen buttons are available for touch/mobile
 - `Audio On/Off` button toggles music
 
 ## Gameplay Notes
@@ -27,11 +27,14 @@ Then open:
 - Walls are wrap-around (no wall collisions).
 - Difficulty selection is disabled (game always uses easy baseline pacing).
 - Speed increases gradually as snake length grows.
-- Lulu-Rage:
-- Random rage-treat chance is `7%`
-- Guaranteed rage-treat if none appeared in `15` treats
-- Rage lasts `15s` plus popup intro time
-- Rage gives double points and a temporary speed boost
+
+### Lulu-Rage
+
+- Random rage-treat chance is `7%`.
+- Guaranteed rage-treat if none appeared in `15` treats.
+- Rage lasts `15s` plus popup intro time.
+- Rage gives double points and a temporary speed boost.
+- Rage visuals include a stronger screen pulse, higher contrast/saturation, scanline overlay, and intensified glow effects.
 
 ## Highscores (Cross-Device)
 
@@ -80,10 +83,10 @@ Supabase config is currently set directly in `app.js`.
 
 1. Push this repository to GitHub.
 2. In Netlify, import the GitHub repo.
-3. Use:
-- Base directory: empty
-- Publish directory: `.`
-- Build command: empty
+3. Use these settings in Netlify:
+   - Base directory: empty
+   - Publish directory: `.`
+   - Build command: empty
 4. Deploy.
 
 Every new commit pushed to `main` triggers an automatic redeploy.
