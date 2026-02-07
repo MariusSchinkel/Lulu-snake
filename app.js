@@ -45,9 +45,9 @@ const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const START_SPEEDS = {
-  easy: 155,
-  medium: 125,
-  hard: 95,
+  easy: 185,
+  medium: 155,
+  hard: 125,
 };
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
@@ -392,7 +392,7 @@ function drawGrid() {
   }
 
   const headSize = size * 1.32;
-  const strokeWidth = headSize * 0.95;
+  const strokeWidth = Math.max(2, Math.round(headSize * 0.95));
 
   const collectBodyLines = () => {
     const lines = [];
@@ -463,6 +463,11 @@ function drawGrid() {
 
     const bodyPattern = ctx.createPattern(images.body, "repeat");
     if (bodyPattern) {
+      if (typeof bodyPattern.setTransform === "function" && typeof DOMMatrix === "function") {
+        // Keep pattern scale consistent per grid cell so body shading stays uniform across the board.
+        const scale = size / images.body.width;
+        bodyPattern.setTransform(new DOMMatrix().scaleSelf(scale, scale));
+      }
       ctx.strokeStyle = bodyPattern;
       drawBodyPath();
       ctx.stroke();
@@ -570,9 +575,11 @@ function fitCanvasToViewport() {
   const byViewportHeight =
     viewportHeight - bodyPadY - shellPadY - topbarEl.offsetHeight - controlsEl.offsetHeight - shellGap * 2 - stageChromeY;
   const byWidth = shellEl.clientWidth - shellPadX - stageChromeX;
-  const nextSize = Math.floor(Math.min(byShellHeight, byViewportHeight, byWidth));
+  const rawSize = Math.floor(Math.min(byShellHeight, byViewportHeight, byWidth));
+  // Snap the canvas to a grid multiple so each cell stays pixel-consistent while moving.
+  const nextSize = Math.floor(rawSize / state.gridSize) * state.gridSize;
 
-  if (nextSize >= 140 && (canvas.width !== nextSize || canvas.height !== nextSize)) {
+  if (nextSize >= 120 && (canvas.width !== nextSize || canvas.height !== nextSize)) {
     canvas.width = nextSize;
     canvas.height = nextSize;
     canvas.style.width = `${nextSize}px`;
