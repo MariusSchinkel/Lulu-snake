@@ -393,6 +393,52 @@ body.rage-mode .game-title span {
   background: rgba(20, 10, 4, 0.55);
 }
 
+.chaser-alert {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+  width: min(94%, 560px);
+  padding: 10px 14px;
+  border-radius: 11px;
+  border: 2px solid #5e3114;
+  background: linear-gradient(135deg, #ffe4ae 0%, #f6b95d 52%, #cf853a 100%);
+  color: #301a0a;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(42, 21, 7, 0.35);
+}
+
+.chaser-alert strong {
+  display: block;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.chaser-alert span {
+  display: block;
+  margin-top: 3px;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.chaser-alert.pop {
+  animation: chaser-alert-pop 0.4s ease-out;
+}
+
+@keyframes chaser-alert-pop {
+  0% {
+    transform: translateX(-50%) translateY(-10px) scale(0.95);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(-50%) translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+
 .rage-card {
   width: min(420px, 88%);
   border-radius: 14px;
@@ -665,6 +711,19 @@ button:active {
   .overlay,
   .rage-popup {
     inset: 6px;
+  }
+
+  .chaser-alert {
+    top: 8px;
+    padding: 8px 10px;
+  }
+
+  .chaser-alert strong {
+    font-size: 11px;
+  }
+
+  .chaser-alert span {
+    font-size: 18px;
   }
 }
 

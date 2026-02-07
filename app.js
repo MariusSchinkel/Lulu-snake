@@ -15,6 +15,8 @@ const nameEntryInput = document.getElementById("name-entry-input");
 const saveScoreButton = document.getElementById("save-score");
 const startGameButton = document.getElementById("start-game");
 const ragePopup = document.getElementById("rage-popup");
+const chaserAlert = document.getElementById("chaser-alert");
+const chaserNameEl = document.getElementById("chaser-name");
 const audioToggle = document.getElementById("audio-toggle");
 const pauseButton = document.getElementById("pause");
 const restartButton = document.getElementById("restart");
@@ -45,11 +47,30 @@ const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
+const CHASER_DURATION_MS = 10000;
+const CHASER_MOVE_STEP_MS = 180;
+const CHASER_CHANCE_PCT = 16;
+const CHASER_FORCE_AFTER_TREATS = 10;
+const CHASER_ALERT_MS = 2200;
+const CHASER_OPTIONS = [
+  { name: "Askaban", coat: "black" },
+  { name: "Henry", coat: "white" },
+];
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
-let images = { head: null, bodyFrames: [], bodyPlain: null, tail: null, treats: [], ragePee: null, rageDog: null };
+let images = {
+  head: null,
+  bodyFrames: [],
+  bodyPlain: null,
+  tail: null,
+  treats: [],
+  ragePee: null,
+  rageDog: null,
+  chaserAskaban: null,
+  chaserHenry: null,
+};
 let lastFoodKey = null;
 let currentTreatIndex = 0;
 let bodyFrameIndex = 0;
@@ -69,6 +90,9 @@ let audioMuted = localStorage.getItem(AUDIO_MUTED_KEY) === "1";
 let rageAudioPrimed = false;
 let ragePlayPending = false;
 let treatsSinceRage = 0;
+let treatsSinceChaser = 0;
+let activeChaser = null;
+let chaserAlertTimer = null;
 let bgFadeRaf = null;
 let rageFadeRaf = null;
 let swipePointerId = null;
@@ -129,6 +153,158 @@ function updateAudioButton() {
 function normalizeName(rawName) {
   const trimmed = String(rawName || "").trim();
   return trimmed || "Player 1";
+}
+
+function sameCell(a, b) {
+  return !!a && !!b && a.x === b.x && a.y === b.y;
+}
+
+function wrappedAxisDelta(from, to, size) {
+  let delta = to - from;
+  const half = size / 2;
+  if (delta > half) delta -= size;
+  if (delta < -half) delta += size;
+  return delta;
+}
+
+function wrappedDistance(a, b, size) {
+  return Math.abs(wrappedAxisDelta(a.x, b.x, size)) + Math.abs(wrappedAxisDelta(a.y, b.y, size));
+}
+
+function wrapCoord(value, size) {
+  return (value + size) % size;
+}
+
+function isSnakeCell(cell) {
+  return state.snake.some((segment) => segment.x === cell.x && segment.y === cell.y);
+}
+
+function chooseChaserSpawnCell() {
+  const size = state.gridSize;
+  const head = state.snake[0];
+  const minDistance = Math.floor(size * 0.45);
+
+  for (let attempt = 0; attempt < 90; attempt += 1) {
+    const candidate = {
+      x: Math.floor(Math.random() * size),
+      y: Math.floor(Math.random() * size),
+    };
+    if (sameCell(candidate, state.food) || isSnakeCell(candidate)) continue;
+    if (wrappedDistance(candidate, head, size) < minDistance) continue;
+    return candidate;
+  }
+
+  return {
+    x: wrapCoord(head.x + Math.floor(size / 2), size),
+    y: wrapCoord(head.y + Math.floor(size / 2), size),
+  };
+}
+
+function hideChaserAlert() {
+  if (chaserAlertTimer) clearTimeout(chaserAlertTimer);
+  chaserAlertTimer = null;
+  if (!chaserAlert) return;
+  chaserAlert.hidden = true;
+  chaserAlert.classList.remove("pop");
+}
+
+function showChaserAlert(name) {
+  if (!chaserAlert || !chaserNameEl) return;
+  hideChaserAlert();
+  chaserNameEl.textContent = name.toUpperCase();
+  chaserAlert.hidden = false;
+  chaserAlert.classList.remove("pop");
+  void chaserAlert.offsetWidth;
+  chaserAlert.classList.add("pop");
+  chaserAlertTimer = setTimeout(() => {
+    if (!chaserAlert) return;
+    chaserAlert.hidden = true;
+    chaserAlert.classList.remove("pop");
+  }, CHASER_ALERT_MS);
+}
+
+function clearActiveChaser() {
+  activeChaser = null;
+}
+
+function spawnChaser() {
+  if (activeChaser || !gameStarted || !state.alive) return false;
+  if (isRageMode() || rageTreatActive) return false;
+  const pick = CHASER_OPTIONS[state.rngSeed % CHASER_OPTIONS.length];
+  const spawn = chooseChaserSpawnCell();
+  const now = performance.now();
+  activeChaser = {
+    name: pick.name,
+    coat: pick.coat,
+    pos: spawn,
+    dir: { dx: 1, dy: 0 },
+    remainingMs: CHASER_DURATION_MS,
+    lastUpdateTs: now,
+    nextMoveTs: now + CHASER_MOVE_STEP_MS,
+  };
+  treatsSinceChaser = 0;
+  showChaserAlert(pick.name);
+  return true;
+}
+
+function maybeSpawnChaser() {
+  if (activeChaser || !gameStarted || !state.alive) return;
+  if (isRageMode() || rageTreatActive) return;
+  const force = treatsSinceChaser >= CHASER_FORCE_AFTER_TREATS;
+  if (force || state.rngSeed % 100 < CHASER_CHANCE_PCT) {
+    spawnChaser();
+  }
+}
+
+function getChaserStepToward(head, pos, size) {
+  const deltaX = wrappedAxisDelta(pos.x, head.x, size);
+  const deltaY = wrappedAxisDelta(pos.y, head.y, size);
+  const options = [];
+
+  if (deltaX !== 0) options.push({ dx: Math.sign(deltaX), dy: 0, weight: Math.abs(deltaX) });
+  if (deltaY !== 0) options.push({ dx: 0, dy: Math.sign(deltaY), weight: Math.abs(deltaY) });
+  if (options.length === 0) return { dx: 0, dy: 0 };
+
+  options.sort((a, b) => b.weight - a.weight);
+  if (options.length === 2 && options[0].weight === options[1].weight) {
+    const preferX = ((state.rngSeed ^ state.score ^ state.snake.length) & 1) === 0;
+    if (!preferX) options.reverse();
+  }
+
+  return { dx: options[0].dx, dy: options[0].dy };
+}
+
+function updateChaserState() {
+  if (!activeChaser || !gameStarted || !state.alive || paused) return;
+  const head = state.snake[0];
+  if (sameCell(activeChaser.pos, head)) {
+    state = { ...state, alive: false };
+    return;
+  }
+
+  const now = performance.now();
+  const elapsed = Math.max(0, now - activeChaser.lastUpdateTs);
+  activeChaser.remainingMs -= elapsed;
+  activeChaser.lastUpdateTs = now;
+
+  if (activeChaser.remainingMs <= 0) {
+    clearActiveChaser();
+    return;
+  }
+
+  if (now < activeChaser.nextMoveTs) return;
+  const step = getChaserStepToward(head, activeChaser.pos, state.gridSize);
+  if (step.dx !== 0 || step.dy !== 0) {
+    activeChaser.dir = step;
+    activeChaser.pos = {
+      x: wrapCoord(activeChaser.pos.x + step.dx, state.gridSize),
+      y: wrapCoord(activeChaser.pos.y + step.dy, state.gridSize),
+    };
+  }
+  activeChaser.nextMoveTs = now + CHASER_MOVE_STEP_MS;
+  if (sameCell(activeChaser.pos, state.snake[0])) {
+    state = { ...state, alive: false };
+  }
 }
 
 function sortHighscores(entries) {
@@ -355,7 +531,20 @@ function fadeOutRageAndStop(durationMs) {
 }
 
 async function loadAssets() {
-  const [head, walk1, walk2, walk3, walk4, bodyFallback, tail, ragePee, rageDog, ...treats] = await Promise.all([
+  const [
+    head,
+    walk1,
+    walk2,
+    walk3,
+    walk4,
+    bodyFallback,
+    tail,
+    ragePee,
+    rageDog,
+    chaserAskaban,
+    chaserHenry,
+    ...treats
+  ] = await Promise.all([
     loadImage("./assets/snake-head.png"),
     loadImage("./assets/snake-body-walk-1.png"),
     loadImage("./assets/snake-body-walk-2.png"),
@@ -365,6 +554,8 @@ async function loadAssets() {
     loadImage("./assets/snake-tail.png"),
     loadImage("./assets/rage-pee.png"),
     loadImage("./assets/rage-dog.png"),
+    loadImage("./assets/chaser-askaban.png"),
+    loadImage("./assets/chaser-henry.png"),
     loadImage("./assets/treat-1.png"),
     loadImage("./assets/treat-2.png"),
     loadImage("./assets/treat-3.png"),
@@ -384,6 +575,8 @@ async function loadAssets() {
     tail: createTrimmedBodyTexture(prepareBodyFrame(tail)),
     ragePee: createTrimmedBodyTexture(prepareBodyFrame(ragePee)),
     rageDog: createTrimmedBodyTexture(prepareBodyFrame(rageDog)),
+    chaserAskaban: createTrimmedBodyTexture(prepareBodyFrame(chaserAskaban)),
+    chaserHenry: createTrimmedBodyTexture(prepareBodyFrame(chaserHenry)),
     treats,
   };
 }
@@ -853,6 +1046,60 @@ function drawGrid() {
     ctx.drawImage(headImg, -headSize / 2, -headSize / 2, headSize, headSize);
     ctx.restore();
   }
+
+  if (activeChaser) {
+    const chaserSize = size * 1.28;
+    const dir = activeChaser.dir && (activeChaser.dir.dx !== 0 || activeChaser.dir.dy !== 0)
+      ? activeChaser.dir
+      : { dx: -1, dy: 0 };
+    const askabanImg = isRenderableImage(images.chaserAskaban) ? images.chaserAskaban : null;
+    const henryImg = isRenderableImage(images.chaserHenry) ? images.chaserHenry : null;
+    let chaserImg = null;
+    let useCoatFallbackFilter = false;
+    if (activeChaser.name === "Askaban" && askabanImg) {
+      chaserImg = askabanImg;
+    } else if (activeChaser.name === "Henry" && henryImg) {
+      chaserImg = henryImg;
+    } else if (isRenderableImage(images.rageDog)) {
+      chaserImg = images.rageDog;
+      useCoatFallbackFilter = true;
+    } else if (isRenderableImage(images.head)) {
+      chaserImg = images.head;
+      useCoatFallbackFilter = true;
+    }
+
+    const centerX = activeChaser.pos.x * size + size / 2;
+    const centerY = activeChaser.pos.y * size + size / 2;
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    applyDirectionalTransform(dir);
+    if (chaserImg) {
+      if (useCoatFallbackFilter) {
+        ctx.filter = activeChaser.coat === "black"
+          ? "brightness(0.32) contrast(1.35) saturate(0.55)"
+          : "brightness(1.38) contrast(1.18) saturate(0.75)";
+      }
+      ctx.drawImage(chaserImg, -chaserSize / 2, -chaserSize / 2, chaserSize, chaserSize);
+      ctx.filter = "none";
+    } else {
+      ctx.fillStyle = activeChaser.coat === "black" ? "#1d1d1f" : "#f8f6ef";
+      ctx.beginPath();
+      ctx.arc(0, 0, chaserSize * 0.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = activeChaser.coat === "black" ? "#e8e6e0" : "#3b2d1f";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = `${Math.max(10, size * 0.22)}px "SF Pro Text", Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillStyle = "rgba(24, 14, 6, 0.95)";
+    ctx.fillText(activeChaser.name, centerX, centerY - chaserSize * 0.62);
+    ctx.restore();
+  }
 }
 
 function updateScore() {
@@ -890,14 +1137,19 @@ function tick() {
   }
   updateScore();
   if (state.score !== prevScore) {
+    if (!ateRageTreat) treatsSinceChaser += 1;
     if (ateRageTreat) {
       activateLuluRage();
     } else if (!isRageMode()) {
       treatsSinceRage += 1;
     }
     assignFoodStyle();
+    maybeSpawnChaser();
   }
+  updateChaserState();
   if (wasAlive && !state.alive) {
+    clearActiveChaser();
+    hideChaserAlert();
     handleGameOver(state.score);
     openMenu("gameover");
   }
@@ -963,9 +1215,12 @@ function resetGame() {
   });
   state = { ...state, pointsPerFood: 1 };
   treatsSinceRage = 0;
+  treatsSinceChaser = 0;
   rageTreatActive = false;
   rageTreatReady = false;
   rageRunner = null;
+  clearActiveChaser();
+  hideChaserAlert();
   rageRemainingMs = 0;
   rageLastUpdateTs = Date.now();
   clearTimeout(ragePauseTimer);
@@ -1128,6 +1383,8 @@ function initHighscores() {
 function openMenu(mode) {
   gameStarted = false;
   paused = true;
+  clearActiveChaser();
+  hideChaserAlert();
   pauseButton.textContent = "Pause";
   overlay.hidden = false;
   renderHighscores();
@@ -1347,6 +1604,8 @@ function updateRageState() {
 function activateLuluRage() {
   unlockAudioIfNeeded();
   treatsSinceRage = 0;
+  clearActiveChaser();
+  hideChaserAlert();
   rageRemainingMs = RAGE_DURATION_MS + RAGE_POPUP_MS;
   rageLastUpdateTs = Date.now();
   state = { ...state, pointsPerFood: 2 };

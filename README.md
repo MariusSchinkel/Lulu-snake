@@ -41,6 +41,9 @@ Then open:
 - During Lulu-Rage, all food is rendered as dog-pee style treats.
 - Rage run-in/pee timing is slower for clearer visual readability.
 - Optional rage assets can be provided as `assets/rage-pee.png` (pee treat) and `assets/rage-dog.png` (running/peeing dog).
+- Occasional chase events now spawn an Afghan hound hunter for about `10s`.
+- Hunters are `Askaban` (black Afghan) or `Henry` (white Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
+- Optional dedicated hunter assets: `assets/chaser-askaban.png` and `assets/chaser-henry.png`.
 
 ### Body Animation Assets
 

@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>Lulu-Snake</title>
-    <link rel="stylesheet" href="styles.css?v=18" />
+    <link rel="stylesheet" href="styles.css?v=19" />
   </head>
   <body>
     <main class="shell">
@@ -32,6 +32,10 @@
 
       <section class="stage">
         <canvas id="game" width="920" height="920" aria-label="Snake game board"></canvas>
+        <div id="chaser-alert" class="chaser-alert" hidden>
+          <strong>OH NO WINDHUND LADY LOST CONTROL</strong>
+          <span id="chaser-name">ASKABAN</span>
+        </div>
         <div id="rage-popup" class="rage-popup" hidden>
           <div class="rage-card">
             <h2>Lulu-Rage</h2>
@@ -65,6 +69,6 @@
 
     </main>
 
-    <script type="module" src="app.js?v=52"></script>
+    <script type="module" src="app.js?v=53"></script>
   </body>
 </html>
