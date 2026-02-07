@@ -27,14 +27,14 @@ Then open:
 - Walls are wrap-around (no wall collisions).
 - Single game mode: no difficulty selector.
 - Start speed is noticeably slower, then increases gradually as snake length grows.
-- Snake body uses 4 walk-cycle frames that animate with movement speed.
+- Snake body uses the 4 `snake-body-walk-*` frames for the full body animation (when available).
 - Body rendering now draws one oriented sprite per snake segment (instead of texture-stroked lines) for cleaner continuity in turns and wraps.
 - A shared trim box is applied across walk frames to keep frame alignment stable.
-- Tail segment now uses `assets/snake-tail.png`.
-- To reduce visual clutter, animated legged segments are concentrated near the head while long-body continuity uses the plain body texture.
+- Tail segment uses `assets/snake-tail.png` with a smaller scale for a more natural dog-tail proportion.
 - Leftward movement now uses sprite mirroring (instead of 180-degree rotation) so head/body stay upright.
 - Corner sprite rendering has been removed; turns now use regular oriented body segments, with tail sprite retained.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
+- Swipe threshold is lower on mobile screens for quicker touch direction changes.
 
 ### Body Animation Assets
 

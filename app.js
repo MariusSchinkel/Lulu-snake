@@ -43,6 +43,7 @@ const RAGE_MUSIC_VOLUME = 0.9;
 const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
+const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
@@ -588,8 +589,8 @@ function drawGrid() {
   const headSize = size * 1.32;
   const bodyLength = size * 1.36;
   const bodyThickness = size * 1.02;
-  const tailLength = size * 1.46;
-  const tailThickness = size * 1.06;
+  const tailLength = size * 1.16;
+  const tailThickness = size * 0.84;
   const activeBodyTexture =
     images.bodyFrames.length > 0 ? images.bodyFrames[bodyFrameIndex % images.bodyFrames.length] : null;
   const plainBodyTexture =
@@ -687,14 +688,13 @@ function drawGrid() {
     ctx.restore();
   };
 
+  const segmentBodyTexture = bodyTextureReady ? activeBodyTexture : plainBodyTexture;
   for (let i = state.snake.length - 1; i >= 1; i -= 1) {
     if (i === state.snake.length - 1) {
       drawTailAt(state.snake[i], getSegmentDirection(i));
       continue;
     }
-    // Keep leg animation close to the head; use plain body for long-tail continuity.
-    const useWalkTexture = bodyTextureReady && i <= 3;
-    drawBodySegmentAt(state.snake[i], getSegmentDirection(i), useWalkTexture ? activeBodyTexture : plainBodyTexture);
+    drawBodySegmentAt(state.snake[i], getSegmentDirection(i), segmentBodyTexture);
   }
 
   const headImg = images.head;
@@ -1009,7 +1009,8 @@ function isSwipeInputTarget(target) {
 
 function handleSwipeDirection(dx, dy) {
   if (!gameStarted || !state.alive) return false;
-  if (Math.abs(dx) < SWIPE_THRESHOLD_PX && Math.abs(dy) < SWIPE_THRESHOLD_PX) return false;
+  const threshold = window.innerWidth <= 640 ? SWIPE_THRESHOLD_MOBILE_PX : SWIPE_THRESHOLD_PX;
+  if (Math.abs(dx) < threshold && Math.abs(dy) < threshold) return false;
   if (Math.abs(dx) > Math.abs(dy)) {
     handleDirection(dx > 0 ? "right" : "left");
   } else {
