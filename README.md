@@ -32,7 +32,9 @@ Then open:
 - A shared trim box is applied across walk frames to keep frame alignment stable.
 - Curved turns now use `assets/snake-body-corner.png`.
 - Tail segment now uses `assets/snake-tail.png`.
+- To reduce visual clutter, animated legged segments are concentrated near the head while long-body continuity uses the plain body texture.
 - Leftward movement now uses sprite mirroring (instead of 180-degree rotation) so head/body stay upright.
+- Corner orientation now uses true neighbor vectors from each segment, fixing upside-down turn cases (for example after down -> left turns).
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 
 ### Body Animation Assets

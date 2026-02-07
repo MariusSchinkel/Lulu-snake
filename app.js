@@ -48,7 +48,7 @@ const BASE_START_TICK_MS = 230;
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
-let images = { head: null, bodyFrames: [], tail: null, corner: null, treats: [] };
+let images = { head: null, bodyFrames: [], bodyPlain: null, tail: null, corner: null, treats: [] };
 let lastFoodKey = null;
 let currentTreatIndex = 0;
 let bodyFrameIndex = 0;
@@ -330,6 +330,7 @@ async function loadAssets() {
   images = {
     head,
     bodyFrames,
+    bodyPlain: fallbackFrame,
     tail: createTrimmedBodyTexture(prepareBodyFrame(tail)),
     corner: createTrimmedBodyTexture(prepareBodyFrame(corner)),
     treats,
@@ -587,13 +588,17 @@ function drawGrid() {
   }
 
   const headSize = size * 1.32;
-  const bodyLength = size * 1.65;
-  const bodyThickness = size * 1.14;
-  const tailLength = size * 1.7;
-  const tailThickness = size * 1.16;
-  const cornerSize = size * 1.8;
+  const bodyLength = size * 1.36;
+  const bodyThickness = size * 1.02;
+  const tailLength = size * 1.46;
+  const tailThickness = size * 1.06;
+  const cornerSize = size * 1.46;
   const activeBodyTexture =
     images.bodyFrames.length > 0 ? images.bodyFrames[bodyFrameIndex % images.bodyFrames.length] : null;
+  const plainBodyTexture =
+    images.bodyPlain && (images.bodyPlain instanceof HTMLCanvasElement || images.bodyPlain.complete === true)
+      ? images.bodyPlain
+      : activeBodyTexture;
   const bodyTextureReady =
     activeBodyTexture &&
     (activeBodyTexture instanceof HTMLCanvasElement || activeBodyTexture.complete === true);
@@ -636,7 +641,9 @@ function drawGrid() {
     const current = state.snake[index];
     const prev = state.snake[index - 1];
     const next = state.snake[index + 1];
-    const fromPrev = getWrappedUnitDelta(prev, current);
+    // Use vectors from the current segment to its neighbors so the corner maps
+    // to the true occupied quadrants on screen.
+    const fromPrev = getWrappedUnitDelta(current, prev);
     const toNext = getWrappedUnitDelta(current, next);
 
     const isTurn = fromPrev.dx !== toNext.dx || fromPrev.dy !== toNext.dy;
@@ -684,14 +691,14 @@ function drawGrid() {
     ctx.fillRect(-cornerSize / 2, -cornerSize / 2, cornerSize, cornerSize);
   };
 
-  const drawBodySegmentAt = (cell, direction) => {
+  const drawBodySegmentAt = (cell, direction, texture) => {
     const cx = cell.x * size + size / 2;
     const cy = cell.y * size + size / 2;
     ctx.save();
     ctx.translate(cx, cy);
     applyDirectionalTransform(direction);
-    if (bodyTextureReady) {
-      ctx.drawImage(activeBodyTexture, -bodyLength / 2, -bodyThickness / 2, bodyLength, bodyThickness);
+    if (texture) {
+      ctx.drawImage(texture, -bodyLength / 2, -bodyThickness / 2, bodyLength, bodyThickness);
     } else {
       drawFallbackBodySegment();
     }
@@ -738,7 +745,9 @@ function drawGrid() {
       drawCornerSegmentAt(state.snake[i], cornerKind);
       continue;
     }
-    drawBodySegmentAt(state.snake[i], getSegmentDirection(i));
+    // Keep leg animation close to the head; use plain body for long-tail continuity.
+    const useWalkTexture = bodyTextureReady && i <= 3;
+    drawBodySegmentAt(state.snake[i], getSegmentDirection(i), useWalkTexture ? activeBodyTexture : plainBodyTexture);
   }
 
   const headImg = images.head;
