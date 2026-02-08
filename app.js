@@ -54,7 +54,7 @@ const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
-const CHASER_SPEED_FACTOR = 0.88;
+const CHASER_SPEED_FACTOR = 0.94;
 const CHASER_STEP_EXTRA_MS = 4;
 const CHASER_CHANCE_PCT = 24;
 const CHASER_FORCE_AFTER_TREATS = 12;
@@ -396,15 +396,15 @@ function clearActiveChaser() {
 }
 
 function getChaserStepMs() {
-  // Askaban should feel fast, but still with room for player recovery.
+  // Askaban should chase actively, but remain a bit slower and more readable.
   let factor = CHASER_SPEED_FACTOR;
   if (activeChaser && state.snake[0]) {
     const distance = wrappedDistance(activeChaser.pos, state.snake[0], state.gridSize);
-    if (distance > 6) factor -= 0.08;
-    if (distance > 10) factor -= 0.05;
+    if (distance > 6) factor -= 0.06;
+    if (distance > 10) factor -= 0.04;
     if (distance < 3) factor += 0.04;
   }
-  return Math.max(72, Math.round(getTickMs() * Math.max(0.72, factor) + CHASER_STEP_EXTRA_MS));
+  return Math.max(78, Math.round(getTickMs() * Math.max(0.78, factor) + CHASER_STEP_EXTRA_MS));
 }
 
 function spawnChaser() {

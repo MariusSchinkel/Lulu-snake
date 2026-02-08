@@ -45,7 +45,7 @@ Then open:
 - Occasional chase events now spawn an Afghan hound hunter for about `45s`.
 - Hunter is now `Askaban` only (black Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
 - Askaban now prioritizes direct head pursuit (distance-first chase steps), so it tracks the snake head more consistently.
-- Askaban chase speed is tuned faster overall, with extra catch-up when farther from the snake.
+- Askaban chase speed is now tuned slightly slower than the last aggressive version, while still keeping distance-based catch-up.
 - After each Askaban event ends, at least `12` treats must be eaten before another chase can trigger.
 - Once that 12-treat recovery is complete, Askaban can reappear much sooner than before.
 - The in-world `ASKABAN` text above the chasing sprite has been removed for cleaner visuals.
