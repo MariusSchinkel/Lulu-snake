@@ -44,9 +44,10 @@ Then open:
 - Optional rage assets can be provided as `assets/rage-pee.png` (pee treat) and `assets/rage-dog.png` (running/peeing dog).
 - Occasional chase events now spawn an Afghan hound hunter for about `45s`.
 - Hunter is now `Askaban` only (black Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
-- Askaban movement now uses a stronger predictive pursuit with less random drifting for tighter, more natural chasing.
-- Askaban chase speed is slightly faster and adaptive (faster catch-up when far away, steadier when close).
+- Askaban now prioritizes direct head pursuit (distance-first chase steps), so it tracks the snake head more consistently.
+- Askaban chase speed is tuned faster overall, with extra catch-up when farther from the snake.
 - After each Askaban event ends, at least `12` treats must be eaten before another chase can trigger.
+- Once that 12-treat recovery is complete, Askaban can reappear much sooner than before.
 - The in-world `ASKABAN` text above the chasing sprite has been removed for cleaner visuals.
 - Optional dedicated hunter asset: `assets/chaser-askaban.png`.
 - Chase music now uses `assets/askaban-song.mp3` during active Askaban events.
@@ -111,14 +112,15 @@ with check (char_length(name) between 1 and 24);
 
 Supabase config is currently set directly in `app.js`.
 
-## Deploy (Netlify)
+## Deploy (GitHub Pages)
 
 1. Push this repository to GitHub.
-2. In Netlify, import the GitHub repo.
-3. Use these settings in Netlify:
-   - Base directory: empty
-   - Publish directory: `.`
-   - Build command: empty
-4. Deploy.
+2. Open GitHub repository settings: `Settings -> Pages`.
+3. Under **Build and deployment**, set:
+   - Source: `Deploy from a branch`
+   - Branch: `main`
+   - Folder: `/ (root)`
+4. Save.
+5. (Optional/custom domain) Set your domain to `www.lulu-snake.de` and keep the root `CNAME` file in the repo.
 
-Every new commit pushed to `main` triggers an automatic redeploy.
+Every new commit pushed to `main` triggers an automatic redeploy on GitHub Pages.

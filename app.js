@@ -48,10 +48,10 @@ const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
-const CHASER_SPEED_FACTOR = 0.94;
-const CHASER_STEP_EXTRA_MS = 6;
-const CHASER_CHANCE_PCT = 16;
-const CHASER_FORCE_AFTER_TREATS = 20;
+const CHASER_SPEED_FACTOR = 0.88;
+const CHASER_STEP_EXTRA_MS = 4;
+const CHASER_CHANCE_PCT = 24;
+const CHASER_FORCE_AFTER_TREATS = 12;
 const CHASER_RECOVERY_TREATS = 12;
 const CHASER_ALERT_MS = 4200;
 const CHASER_MUSIC_VOLUME = 0.82;
@@ -328,10 +328,11 @@ function getChaserStepMs() {
   let factor = CHASER_SPEED_FACTOR;
   if (activeChaser && state.snake[0]) {
     const distance = wrappedDistance(activeChaser.pos, state.snake[0], state.gridSize);
-    if (distance > 7) factor -= 0.1;
+    if (distance > 6) factor -= 0.08;
+    if (distance > 10) factor -= 0.05;
     if (distance < 3) factor += 0.04;
   }
-  return Math.max(82, Math.round(getTickMs() * Math.max(0.78, factor) + CHASER_STEP_EXTRA_MS));
+  return Math.max(72, Math.round(getTickMs() * Math.max(0.72, factor) + CHASER_STEP_EXTRA_MS));
 }
 
 function spawnChaser() {
@@ -348,7 +349,6 @@ function spawnChaser() {
     remainingMs: CHASER_DURATION_MS,
     lastUpdateTs: now,
     nextMoveTs: now + getChaserStepMs(),
-    wanderSteps: 0,
   };
   showChaserAlert(pick.name);
   startChaserMusic();
@@ -365,16 +365,6 @@ function maybeSpawnChaser() {
   }
 }
 
-function getChaserTargetCell(head, size) {
-  if (!activeChaser) return head;
-  const distance = wrappedDistance(activeChaser.pos, head, size);
-  const lookAhead = Math.min(3, Math.max(1, Math.floor(distance / 5) + 1));
-  return {
-    x: wrapCoord(head.x + state.dir.dx * lookAhead, size),
-    y: wrapCoord(head.y + state.dir.dy * lookAhead, size),
-  };
-}
-
 function getChaserStepToward(head, pos, size) {
   const directions = [
     { dx: 1, dy: 0 },
@@ -382,12 +372,7 @@ function getChaserStepToward(head, pos, size) {
     { dx: 0, dy: 1 },
     { dx: 0, dy: -1 },
   ];
-  const target = getChaserTargetCell(head, size);
   const currentHeadDist = wrappedDistance(pos, head, size);
-  const currentTargetDist = wrappedDistance(pos, target, size);
-  const xGap = Math.abs(wrappedAxisDelta(pos.x, target.x, size));
-  const yGap = Math.abs(wrappedAxisDelta(pos.y, target.y, size));
-  const dominantAxis = xGap >= yGap ? "x" : "y";
   let best = null;
 
   for (const step of directions) {
@@ -396,26 +381,16 @@ function getChaserStepToward(head, pos, size) {
       y: wrapCoord(pos.y + step.dy, size),
     };
     const nextHeadDist = wrappedDistance(next, head, size);
-    const nextTargetDist = wrappedDistance(next, target, size);
     const forward = step.dx === activeChaser.dir.dx && step.dy === activeChaser.dir.dy;
     const reverse = step.dx === -activeChaser.dir.dx && step.dy === -activeChaser.dir.dy;
     const hitsBody = state.snake.slice(1).some((segment) => sameCell(segment, next));
-    const inWanderMode = activeChaser.wanderSteps > 0;
 
-    let score = Math.random() * (inWanderMode ? 0.2 : 0.07);
-    score += forward ? 1.35 : 0;
-    score -= reverse ? 2.6 : 0;
-    if (!inWanderMode) {
-      score += (currentTargetDist - nextTargetDist) * 1.95;
-      score += (currentHeadDist - nextHeadDist) * 1.05;
-    } else {
-      score += (currentTargetDist - nextTargetDist) * 0.65;
-      score += (currentHeadDist - nextHeadDist) * 0.45;
-    }
-    if (!forward && !reverse) score -= 0.12;
-    if (dominantAxis === "x" && step.dx !== 0) score += 0.24;
-    if (dominantAxis === "y" && step.dy !== 0) score += 0.24;
-    if (hitsBody && !sameCell(next, head)) score -= 1.4;
+    let score = (currentHeadDist - nextHeadDist) * 6.2;
+    if (nextHeadDist === 0) score += 100;
+    score += forward ? 0.18 : 0;
+    score -= reverse ? 0.9 : 0;
+    if (hitsBody && !sameCell(next, head)) score -= 1.1;
+    score += Math.random() * 0.015;
 
     if (!best || score > best.score) {
       best = { step, score };
@@ -444,9 +419,6 @@ function updateChaserState() {
   }
 
   if (now < activeChaser.nextMoveTs) return;
-  if (activeChaser.wanderSteps <= 0 && Math.random() < 0.06) {
-    activeChaser.wanderSteps = 1;
-  }
   const step = getChaserStepToward(head, activeChaser.pos, state.gridSize);
   if (step.dx !== 0 || step.dy !== 0) {
     activeChaser.dir = step;
@@ -455,7 +427,6 @@ function updateChaserState() {
       y: wrapCoord(activeChaser.pos.y + step.dy, state.gridSize),
     };
   }
-  if (activeChaser.wanderSteps > 0) activeChaser.wanderSteps -= 1;
   activeChaser.nextMoveTs = now + getChaserStepMs();
   if (sameCell(activeChaser.pos, state.snake[0])) {
     state = { ...state, alive: false };
