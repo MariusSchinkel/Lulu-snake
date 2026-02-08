@@ -45,7 +45,7 @@ Then open:
 - Occasional chase events now spawn an Afghan hound hunter for about `45s`.
 - Hunter is now `Askaban` only (black Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
 - Askaban now prioritizes direct head pursuit (distance-first chase steps), so it tracks the snake head more consistently.
-- Askaban chase speed is now tuned slightly slower than the last aggressive version, while still keeping distance-based catch-up.
+- Askaban is now always tuned slightly slower than the snake, while still using stronger head-targeting pursuit.
 - After each Askaban event ends, at least `12` treats must be eaten before another chase can trigger.
 - Once that 12-treat recovery is complete, Askaban can reappear much sooner than before.
 - The in-world `ASKABAN` text above the chasing sprite has been removed for cleaner visuals.
@@ -74,6 +74,7 @@ Then open:
 - Top 5 scores are synced via Supabase (`public.lulu_scores`).
 - The game keeps a local cache as fallback if network requests fail.
 - Name defaults to `Player 1` if empty.
+- When you reach Top 5, you edit your name inline in the highlighted score row and get two actions: `Save Score` and `Save Score & Play Again`.
 
 ## Supabase Setup
 

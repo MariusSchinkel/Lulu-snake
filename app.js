@@ -54,8 +54,8 @@ const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
-const CHASER_SPEED_FACTOR = 0.94;
-const CHASER_STEP_EXTRA_MS = 4;
+const CHASER_SPEED_FACTOR = 1.12;
+const CHASER_STEP_EXTRA_MS = 10;
 const CHASER_CHANCE_PCT = 24;
 const CHASER_FORCE_AFTER_TREATS = 12;
 const CHASER_RECOVERY_TREATS = 12;
@@ -83,6 +83,7 @@ let currentTreatIndex = 0;
 let bodyFrameIndex = 0;
 let gameStarted = false;
 let pendingHighscore = null;
+let pendingHighscoreName = "";
 let highscores = [];
 let rageTreatActive = false;
 let rageTreatReady = false;
@@ -396,15 +397,17 @@ function clearActiveChaser() {
 }
 
 function getChaserStepMs() {
-  // Askaban should chase actively, but remain a bit slower and more readable.
+  // Askaban must stay slightly slower than snake while still being threatening.
   let factor = CHASER_SPEED_FACTOR;
   if (activeChaser && state.snake[0]) {
     const distance = wrappedDistance(activeChaser.pos, state.snake[0], state.gridSize);
-    if (distance > 6) factor -= 0.06;
-    if (distance > 10) factor -= 0.04;
-    if (distance < 3) factor += 0.04;
+    if (distance > 6) factor -= 0.04;
+    if (distance > 10) factor -= 0.03;
+    if (distance < 3) factor += 0.05;
   }
-  return Math.max(78, Math.round(getTickMs() * Math.max(0.78, factor) + CHASER_STEP_EXTRA_MS));
+  // Keep a hard lower bound above snake tick so Askaban never outruns the snake.
+  const effectiveFactor = Math.max(1.03, factor);
+  return Math.max(92, Math.round(getTickMs() * effectiveFactor + CHASER_STEP_EXTRA_MS));
 }
 
 function spawnChaser() {
@@ -445,6 +448,11 @@ function getChaserStepToward(head, pos, size) {
     { dx: 0, dy: -1 },
   ];
   const currentHeadDist = wrappedDistance(pos, head, size);
+  const dxToHead = wrappedAxisDelta(pos.x, head.x, size);
+  const dyToHead = wrappedAxisDelta(pos.y, head.y, size);
+  const preferX = Math.abs(dxToHead) >= Math.abs(dyToHead);
+  const preferredDx = dxToHead === 0 ? 0 : Math.sign(dxToHead);
+  const preferredDy = dyToHead === 0 ? 0 : Math.sign(dyToHead);
   let best = null;
 
   for (const step of directions) {
@@ -457,12 +465,16 @@ function getChaserStepToward(head, pos, size) {
     const reverse = step.dx === -activeChaser.dir.dx && step.dy === -activeChaser.dir.dy;
     const hitsBody = state.snake.slice(1).some((segment) => sameCell(segment, next));
 
-    let score = (currentHeadDist - nextHeadDist) * 6.2;
-    if (nextHeadDist === 0) score += 100;
-    score += forward ? 0.18 : 0;
-    score -= reverse ? 0.9 : 0;
+    // Prioritize distance reduction to snake head with minimal inertia bias.
+    let score = (currentHeadDist - nextHeadDist) * 10.5;
+    if (nextHeadDist < currentHeadDist) score += 1.0;
+    if (nextHeadDist === 0) score += 220;
+    score += forward ? 0.08 : 0;
+    score -= reverse ? 0.25 : 0;
+    if (preferX && step.dx === preferredDx && preferredDx !== 0) score += 0.45;
+    if (!preferX && step.dy === preferredDy && preferredDy !== 0) score += 0.45;
     if (hitsBody && !sameCell(next, head)) score -= 1.1;
-    score += Math.random() * 0.015;
+    score += Math.random() * 0.004;
 
     if (!best || score > best.score) {
       best = { step, score };
@@ -687,7 +699,10 @@ async function updateHighscoreNameOnServer(id, name, editToken) {
         p_name: normalizeName(name),
         p_edit_token: token,
       });
-      return raw ? normalizeRemoteRow(raw) : null;
+      if (raw) return normalizeRemoteRow(raw);
+      if (!ENABLE_LEGACY_SUPABASE_FALLBACK) return null;
+      // RPC can return no row when token/hash mismatch during partial migrations.
+      return updateHighscoreNameLegacyOnServer(id, name);
     } catch (error) {
       if (!shouldFallbackToLegacySupabase(error)) throw error;
       console.warn("RPC rename_highscore unavailable, falling back to legacy update.");
@@ -1550,14 +1565,55 @@ function saveLastName(rawName) {
   return name;
 }
 
-function updateHighscoreName(id, rawName) {
+function showPendingNameEntry() {
+  if (!nameEntry || !nameEntryInput) return;
+  nameEntry.hidden = false;
+  const label = nameEntry.querySelector("label");
+  if (label) label.hidden = true;
+  nameEntryInput.hidden = true;
+}
+
+function hidePendingNameEntry() {
+  if (!nameEntry) return;
+  const label = nameEntry.querySelector("label");
+  if (label) label.hidden = true;
+  if (nameEntryInput) nameEntryInput.hidden = false;
+  nameEntry.hidden = true;
+}
+
+function submitPendingHighscoreName() {
+  const inlineInput = menuHighscoreList?.querySelector(".score-name-input");
+  const typed = normalizeName(
+    inlineInput?.value
+    || nameEntryInput?.value
+    || pendingHighscoreName
+    || getStoredName()
+  );
+  pendingHighscoreName = typed;
+  saveLastName(typed);
+  if (inlineInput) inlineInput.value = typed;
+
+  if (!pendingHighscore?.id) {
+    hidePendingNameEntry();
+    return;
+  }
+
+  const pendingId = pendingHighscore.id;
+  const hasPendingRow = highscores.some((entry) => entry.id === pendingId);
+  if (hasPendingRow) {
+    updateHighscoreName(pendingId, typed);
+  }
+}
+
+function updateHighscoreName(id, rawName, options = {}) {
+  const { syncRemote = true } = options;
   const idx = highscores.findIndex((entry) => entry.id === id);
   if (idx < 0) return;
   const normalized = normalizeName(rawName);
   highscores[idx] = { ...highscores[idx], name: normalized };
   applyHighscores(highscores);
   saveLastName(normalized);
-  if (!id.startsWith("local-")) {
+  if (syncRemote && !id.startsWith("local-")) {
     const token = readHighscoreEditToken(id);
     updateHighscoreNameOnServer(id, normalized, token).then((updated) => {
       if (!updated) return;
@@ -1589,19 +1645,16 @@ function renderHighscores() {
       li.classList.add("top5-new");
       const input = document.createElement("input");
       input.className = "score-name-input";
-      input.value = entry.name || "Player 1";
+      input.maxLength = MAX_PLAYER_NAME_LENGTH;
+      input.value = pendingHighscoreName || entry.name || "Player 1";
       input.addEventListener("input", () => {
-        updateHighscoreName(entry.id, input.value);
-      });
-      input.addEventListener("blur", () => {
-        const normalized = normalizeName(input.value);
-        input.value = normalized;
-        updateHighscoreName(entry.id, normalized);
+        pendingHighscoreName = input.value;
+        updateHighscoreName(entry.id, input.value, { syncRemote: false });
       });
       input.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
-          input.blur();
+          submitPendingHighscoreName();
         }
       });
       const suffix = document.createElement("span");
@@ -1626,6 +1679,7 @@ function recordHighscore(score, rawName) {
   const normalizedScore = normalizeScore(score);
   if (normalizedScore <= 0) return null;
   const name = saveLastName(rawName);
+  pendingHighscoreName = name;
   const entry = {
     id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     name,
@@ -1646,7 +1700,7 @@ function recordHighscore(score, rawName) {
       if (!remoteEntry) return;
       moveHighscoreEditToken(entry.id, remoteEntry.id);
       const latestLocalEntry = highscores.find((item) => item.id === entry.id) || currentEntry;
-      const localName = normalizeName(latestLocalEntry.name);
+      const localName = normalizeName(pendingHighscoreName || latestLocalEntry.name);
       const merged = highscores.filter((item) => item.id !== entry.id);
       merged.push({ ...remoteEntry, name: localName });
       applyHighscores(merged);
@@ -1670,10 +1724,11 @@ function recordHighscore(score, rawName) {
 function handleGameOver(score) {
   if (isTopFiveScore(score)) {
     pendingHighscore = recordHighscore(score, getStoredName());
-    nameEntry.hidden = true;
+    showPendingNameEntry();
   } else {
     pendingHighscore = null;
-    nameEntry.hidden = true;
+    pendingHighscoreName = "";
+    hidePendingNameEntry();
   }
   renderHighscores();
 }
@@ -1692,14 +1747,20 @@ function openMenu(mode) {
   pauseButton.textContent = "Pause";
   overlay.hidden = false;
   renderHighscores();
-  void refreshHighscoresFromServer();
+  if (!(mode === "gameover" && pendingHighscore)) {
+    void refreshHighscoresFromServer();
+  }
   if (mode === "gameover") {
     menuTitle.textContent = "Game Over";
-    menuText.textContent = `Score: ${state.score}. Press Play Again.`;
-    startGameButton.textContent = "Play Again";
     if (!pendingHighscore) {
-      nameEntry.hidden = true;
+      menuText.textContent = `Score: ${state.score}. Press Play Again.`;
+      startGameButton.textContent = "Play Again";
+      pendingHighscoreName = "";
+      hidePendingNameEntry();
     } else {
+      menuText.textContent = `Score: ${state.score}.`;
+      startGameButton.textContent = "Save Score & Play Again";
+      showPendingNameEntry();
       const inlineInput = menuHighscoreList.querySelector(".score-name-input");
       if (inlineInput) {
         inlineInput.focus();
@@ -1708,7 +1769,8 @@ function openMenu(mode) {
     }
   } else {
     pendingHighscore = null;
-    nameEntry.hidden = true;
+    pendingHighscoreName = "";
+    hidePendingNameEntry();
     menuTitle.textContent = "Lulu-Snake";
     menuText.textContent = "Press Start to begin.";
     startGameButton.textContent = "Start Game";
@@ -1787,17 +1849,20 @@ restartButton.addEventListener("click", () => {
 });
 
 startGameButton.addEventListener("click", () => {
+  if (pendingHighscore?.id) {
+    submitPendingHighscoreName();
+  }
   resetGame();
 });
 
 saveScoreButton.addEventListener("click", () => {
-  nameEntry.hidden = true;
+  submitPendingHighscoreName();
 });
 
 nameEntryInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
-    nameEntry.hidden = true;
+    submitPendingHighscoreName();
   }
 });
 
