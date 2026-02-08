@@ -47,14 +47,15 @@ const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
-const CHASER_DURATION_MS = 10000;
-const CHASER_MOVE_STEP_MS = 180;
+const CHASER_DURATION_MS = 45000;
+const CHASER_SPEED_FACTOR = 1.12;
+const CHASER_STEP_EXTRA_MS = 10;
 const CHASER_CHANCE_PCT = 16;
 const CHASER_FORCE_AFTER_TREATS = 10;
-const CHASER_ALERT_MS = 2200;
+const CHASER_ALERT_MS = 4200;
+const CHASER_MUSIC_VOLUME = 0.82;
 const CHASER_OPTIONS = [
-  { name: "Askaban", coat: "black" },
-  { name: "Henry", coat: "white" },
+  { name: "Askaban" },
 ];
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
@@ -69,7 +70,6 @@ let images = {
   ragePee: null,
   rageDog: null,
   chaserAskaban: null,
-  chaserHenry: null,
 };
 let lastFoodKey = null;
 let currentTreatIndex = 0;
@@ -89,6 +89,8 @@ let rageMusicActive = false;
 let audioMuted = localStorage.getItem(AUDIO_MUTED_KEY) === "1";
 let rageAudioPrimed = false;
 let ragePlayPending = false;
+let chaserMusicActive = false;
+let bgPausedForChaser = false;
 let treatsSinceRage = 0;
 let treatsSinceChaser = 0;
 let activeChaser = null;
@@ -109,8 +111,14 @@ const rageMusic = new Audio("./assets/lulu-rage.mp3");
 rageMusic.loop = false;
 rageMusic.volume = RAGE_MUSIC_VOLUME;
 rageMusic.playsInline = true;
+
+const chaserMusic = new Audio("./assets/askaban-song.mp3");
+chaserMusic.loop = true;
+chaserMusic.volume = CHASER_MUSIC_VOLUME;
+chaserMusic.playsInline = true;
 bgMusic.muted = audioMuted;
 rageMusic.muted = audioMuted;
+chaserMusic.muted = audioMuted;
 
 function playRageTrack() {
   if (audioMuted) return;
@@ -119,6 +127,37 @@ function playRageTrack() {
   }).catch(() => {
     ragePlayPending = true;
   });
+}
+
+function startChaserMusic() {
+  if (audioMuted || isRageMode()) return;
+  if (!bgMusic.paused) {
+    bgMusic.pause();
+    bgPausedForChaser = true;
+  }
+  chaserMusic.pause();
+  chaserMusic.currentTime = 0;
+  chaserMusic.volume = CHASER_MUSIC_VOLUME;
+  chaserMusic.play().then(() => {
+    chaserMusicActive = true;
+  }).catch(() => {
+    chaserMusicActive = false;
+  });
+}
+
+function stopChaserMusic() {
+  if (!chaserMusic.paused || chaserMusicActive) {
+    chaserMusic.pause();
+    chaserMusic.currentTime = 0;
+  }
+  chaserMusicActive = false;
+  if (bgPausedForChaser) {
+    bgPausedForChaser = false;
+    if (!audioMuted && !isRageMode()) {
+      bgMusic.volume = bgWasDucked ? BG_DUCKED_VOLUME : BG_MUSIC_VOLUME;
+      bgMusic.play().catch(() => {});
+    }
+  }
 }
 
 function primeRageTrackIfNeeded() {
@@ -225,6 +264,12 @@ function showChaserAlert(name) {
 
 function clearActiveChaser() {
   activeChaser = null;
+  stopChaserMusic();
+}
+
+function getChaserStepMs() {
+  // Keep Askaban slower than the snake tick while still responsive.
+  return Math.max(96, Math.round(getTickMs() * CHASER_SPEED_FACTOR + CHASER_STEP_EXTRA_MS));
 }
 
 function spawnChaser() {
@@ -235,15 +280,16 @@ function spawnChaser() {
   const now = performance.now();
   activeChaser = {
     name: pick.name,
-    coat: pick.coat,
     pos: spawn,
     dir: { dx: 1, dy: 0 },
     remainingMs: CHASER_DURATION_MS,
     lastUpdateTs: now,
-    nextMoveTs: now + CHASER_MOVE_STEP_MS,
+    nextMoveTs: now + getChaserStepMs(),
+    wanderSteps: 0,
   };
   treatsSinceChaser = 0;
   showChaserAlert(pick.name);
+  startChaserMusic();
   return true;
 }
 
@@ -257,21 +303,44 @@ function maybeSpawnChaser() {
 }
 
 function getChaserStepToward(head, pos, size) {
-  const deltaX = wrappedAxisDelta(pos.x, head.x, size);
-  const deltaY = wrappedAxisDelta(pos.y, head.y, size);
-  const options = [];
+  const directions = [
+    { dx: 1, dy: 0 },
+    { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 0, dy: -1 },
+  ];
+  const currentDist = wrappedDistance(pos, head, size);
+  let best = null;
 
-  if (deltaX !== 0) options.push({ dx: Math.sign(deltaX), dy: 0, weight: Math.abs(deltaX) });
-  if (deltaY !== 0) options.push({ dx: 0, dy: Math.sign(deltaY), weight: Math.abs(deltaY) });
-  if (options.length === 0) return { dx: 0, dy: 0 };
+  for (const step of directions) {
+    const next = {
+      x: wrapCoord(pos.x + step.dx, size),
+      y: wrapCoord(pos.y + step.dy, size),
+    };
+    const nextDist = wrappedDistance(next, head, size);
+    const forward = step.dx === activeChaser.dir.dx && step.dy === activeChaser.dir.dy;
+    const reverse = step.dx === -activeChaser.dir.dx && step.dy === -activeChaser.dir.dy;
+    const hitsBody = state.snake.slice(1).some((segment) => sameCell(segment, next));
+    const inWanderMode = activeChaser.wanderSteps > 0;
 
-  options.sort((a, b) => b.weight - a.weight);
-  if (options.length === 2 && options[0].weight === options[1].weight) {
-    const preferX = ((state.rngSeed ^ state.score ^ state.snake.length) & 1) === 0;
-    if (!preferX) options.reverse();
+    let score = Math.random() * (inWanderMode ? 0.95 : 0.35);
+    score += forward ? 1.1 : 0;
+    score -= reverse ? 1.2 : 0;
+    if (!inWanderMode) {
+      score += (currentDist - nextDist) * 1.35;
+      const preferredDist = 2.2;
+      score += (Math.abs(currentDist - preferredDist) - Math.abs(nextDist - preferredDist)) * 0.55;
+    } else {
+      score += (currentDist - nextDist) * 0.55;
+    }
+    if (hitsBody && !sameCell(next, head)) score -= 0.75;
+
+    if (!best || score > best.score) {
+      best = { step, score };
+    }
   }
 
-  return { dx: options[0].dx, dy: options[0].dy };
+  return best ? { dx: best.step.dx, dy: best.step.dy } : { dx: 0, dy: 0 };
 }
 
 function updateChaserState() {
@@ -293,6 +362,9 @@ function updateChaserState() {
   }
 
   if (now < activeChaser.nextMoveTs) return;
+  if (activeChaser.wanderSteps <= 0 && Math.random() < 0.14) {
+    activeChaser.wanderSteps = 1 + Math.floor(Math.random() * 2);
+  }
   const step = getChaserStepToward(head, activeChaser.pos, state.gridSize);
   if (step.dx !== 0 || step.dy !== 0) {
     activeChaser.dir = step;
@@ -301,7 +373,8 @@ function updateChaserState() {
       y: wrapCoord(activeChaser.pos.y + step.dy, state.gridSize),
     };
   }
-  activeChaser.nextMoveTs = now + CHASER_MOVE_STEP_MS;
+  if (activeChaser.wanderSteps > 0) activeChaser.wanderSteps -= 1;
+  activeChaser.nextMoveTs = now + getChaserStepMs();
   if (sameCell(activeChaser.pos, state.snake[0])) {
     state = { ...state, alive: false };
   }
@@ -466,17 +539,25 @@ function setAudioMuted(nextMuted) {
   localStorage.setItem(AUDIO_MUTED_KEY, audioMuted ? "1" : "0");
   bgMusic.muted = audioMuted;
   rageMusic.muted = audioMuted;
+  chaserMusic.muted = audioMuted;
   if (bgFadeRaf) cancelAnimationFrame(bgFadeRaf);
   bgFadeRaf = null;
   if (audioMuted) {
     bgMusic.pause();
     rageMusic.pause();
+    chaserMusic.pause();
     rageMusicActive = false;
+    chaserMusicActive = false;
+    bgPausedForChaser = false;
     if (rageFadeRaf) cancelAnimationFrame(rageFadeRaf);
     rageFadeRaf = null;
-  } else if (audioUnlocked && bgMusic.paused && !isRageMode()) {
-    bgMusic.volume = bgWasDucked ? BG_DUCKED_VOLUME : BG_MUSIC_VOLUME;
-    bgMusic.play().catch(() => {});
+  } else if (audioUnlocked) {
+    if (activeChaser && !isRageMode()) {
+      startChaserMusic();
+    } else if (bgMusic.paused && !isRageMode()) {
+      bgMusic.volume = bgWasDucked ? BG_DUCKED_VOLUME : BG_MUSIC_VOLUME;
+      bgMusic.play().catch(() => {});
+    }
     primeRageTrackIfNeeded();
   }
   updateAudioButton();
@@ -542,7 +623,6 @@ async function loadAssets() {
     ragePee,
     rageDog,
     chaserAskaban,
-    chaserHenry,
     ...treats
   ] = await Promise.all([
     loadImage("./assets/snake-head.png"),
@@ -555,7 +635,6 @@ async function loadAssets() {
     loadImage("./assets/rage-pee.png"),
     loadImage("./assets/rage-dog.png"),
     loadImage("./assets/chaser-askaban.png"),
-    loadImage("./assets/chaser-henry.png"),
     loadImage("./assets/treat-1.png"),
     loadImage("./assets/treat-2.png"),
     loadImage("./assets/treat-3.png"),
@@ -576,7 +655,6 @@ async function loadAssets() {
     ragePee: createTrimmedBodyTexture(prepareBodyFrame(ragePee)),
     rageDog: createTrimmedBodyTexture(prepareBodyFrame(rageDog)),
     chaserAskaban: createTrimmedBodyTexture(prepareBodyFrame(chaserAskaban)),
-    chaserHenry: createTrimmedBodyTexture(prepareBodyFrame(chaserHenry)),
     treats,
   };
 }
@@ -1048,24 +1126,18 @@ function drawGrid() {
   }
 
   if (activeChaser) {
-    const chaserSize = size * 1.28;
+    const chaserSize = size * 1.44;
     const dir = activeChaser.dir && (activeChaser.dir.dx !== 0 || activeChaser.dir.dy !== 0)
       ? activeChaser.dir
       : { dx: -1, dy: 0 };
     const askabanImg = isRenderableImage(images.chaserAskaban) ? images.chaserAskaban : null;
-    const henryImg = isRenderableImage(images.chaserHenry) ? images.chaserHenry : null;
     let chaserImg = null;
-    let useCoatFallbackFilter = false;
-    if (activeChaser.name === "Askaban" && askabanImg) {
+    if (askabanImg) {
       chaserImg = askabanImg;
-    } else if (activeChaser.name === "Henry" && henryImg) {
-      chaserImg = henryImg;
     } else if (isRenderableImage(images.rageDog)) {
       chaserImg = images.rageDog;
-      useCoatFallbackFilter = true;
     } else if (isRenderableImage(images.head)) {
       chaserImg = images.head;
-      useCoatFallbackFilter = true;
     }
 
     const centerX = activeChaser.pos.x * size + size / 2;
@@ -1074,19 +1146,15 @@ function drawGrid() {
     ctx.translate(centerX, centerY);
     applyDirectionalTransform(dir);
     if (chaserImg) {
-      if (useCoatFallbackFilter) {
-        ctx.filter = activeChaser.coat === "black"
-          ? "brightness(0.32) contrast(1.35) saturate(0.55)"
-          : "brightness(1.38) contrast(1.18) saturate(0.75)";
-      }
+      ctx.filter = "brightness(0.32) contrast(1.35) saturate(0.55)";
       ctx.drawImage(chaserImg, -chaserSize / 2, -chaserSize / 2, chaserSize, chaserSize);
       ctx.filter = "none";
     } else {
-      ctx.fillStyle = activeChaser.coat === "black" ? "#1d1d1f" : "#f8f6ef";
+      ctx.fillStyle = "#1d1d1f";
       ctx.beginPath();
       ctx.arc(0, 0, chaserSize * 0.4, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = activeChaser.coat === "black" ? "#e8e6e0" : "#3b2d1f";
+      ctx.strokeStyle = "#e8e6e0";
       ctx.lineWidth = 2;
       ctx.stroke();
     }

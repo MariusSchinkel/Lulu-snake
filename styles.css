@@ -401,41 +401,80 @@ body.rage-mode .game-title span {
   z-index: 5;
   pointer-events: none;
   width: min(94%, 560px);
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-radius: 11px;
-  border: 2px solid #5e3114;
-  background: linear-gradient(135deg, #ffe4ae 0%, #f6b95d 52%, #cf853a 100%);
+  border: 2px solid #5e220b;
+  background: linear-gradient(120deg, #fff1ca 0%, #ffcf74 30%, #ff9e47 65%, #d46f2a 100%);
   color: #301a0a;
   text-align: center;
-  box-shadow: 0 8px 24px rgba(42, 21, 7, 0.35);
+  box-shadow:
+    0 10px 28px rgba(42, 21, 7, 0.45),
+    0 0 0 2px rgba(255, 236, 186, 0.58) inset;
 }
 
 .chaser-alert strong {
   display: block;
-  font-size: 13px;
-  letter-spacing: 0.04em;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-shadow: 0 1px 0 rgba(255, 248, 220, 0.7);
 }
 
 .chaser-alert span {
   display: block;
   margin-top: 3px;
-  font-size: 24px;
+  font-size: 28px;
   font-weight: 900;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
+  text-shadow:
+    0 1px 0 rgba(255, 250, 233, 0.76),
+    0 0 16px rgba(255, 186, 83, 0.52);
 }
 
 .chaser-alert.pop {
-  animation: chaser-alert-pop 0.4s ease-out;
+  animation: chaser-alert-pop 0.8s ease-out, chaser-alert-shimmer 0.95s ease-in-out 0.25s 2;
+}
+
+.chaser-alert.pop span {
+  animation: chaser-name-pulse 0.55s ease-in-out 0.2s 4;
 }
 
 @keyframes chaser-alert-pop {
   0% {
-    transform: translateX(-50%) translateY(-10px) scale(0.95);
+    transform: translateX(-50%) translateY(-14px) scale(0.88);
     opacity: 0;
+  }
+  55% {
+    transform: translateX(-50%) translateY(0) scale(1.08);
+    opacity: 1;
   }
   100% {
     transform: translateX(-50%) translateY(0) scale(1);
     opacity: 1;
+  }
+}
+
+@keyframes chaser-alert-shimmer {
+  0% {
+    filter: brightness(1) saturate(1);
+  }
+  50% {
+    filter: brightness(1.1) saturate(1.15);
+  }
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+}
+
+@keyframes chaser-name-pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
   }
 }
 
@@ -719,11 +758,11 @@ button:active {
   }
 
   .chaser-alert strong {
-    font-size: 11px;
+    font-size: 12px;
   }
 
   .chaser-alert span {
-    font-size: 18px;
+    font-size: 21px;
   }
 }
 

@@ -41,9 +41,13 @@ Then open:
 - During Lulu-Rage, all food is rendered as dog-pee style treats.
 - Rage run-in/pee timing is slower for clearer visual readability.
 - Optional rage assets can be provided as `assets/rage-pee.png` (pee treat) and `assets/rage-dog.png` (running/peeing dog).
-- Occasional chase events now spawn an Afghan hound hunter for about `10s`.
-- Hunters are `Askaban` (black Afghan) or `Henry` (white Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
-- Optional dedicated hunter assets: `assets/chaser-askaban.png` and `assets/chaser-henry.png`.
+- Occasional chase events now spawn an Afghan hound hunter for about `45s`.
+- Hunter is now `Askaban` only (black Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
+- Askaban movement uses momentum-led chasing with light wandering so it looks more natural but still actively hunts.
+- Askaban chase speed is faster than before, while still tuned to remain slightly slower than the snake speed.
+- Optional dedicated hunter asset: `assets/chaser-askaban.png`.
+- Chase music now uses `assets/askaban-song.mp3` during active Askaban events.
+- The `OH NO WINDHUND LADY LOST CONTROL` alert now stays longer on screen and uses a stronger pop/pulse animation for higher visibility.
 
 ### Body Animation Assets
 
