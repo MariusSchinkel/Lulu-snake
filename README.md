@@ -182,6 +182,7 @@ grant execute on function public.rename_highscore(uuid, text, text) to anon;
 ```
 
 Client config is set in `app.js`. The client now writes via RPC (`create_highscore`, `rename_highscore`) instead of direct table insert/update.
+If RPC migration has not been applied yet, the app can temporarily fall back to legacy direct writes for compatibility, but secure operation requires completing the SQL setup above.
 
 ## Deploy (GitHub Pages)
 

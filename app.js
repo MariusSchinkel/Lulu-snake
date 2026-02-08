@@ -38,6 +38,7 @@ const SUPABASE_RENAME_SCORE_RPC = "rename_highscore";
 const MAX_PLAYER_NAME_LENGTH = 24;
 const MAX_SUBMIT_SCORE = 100000;
 const HIGHSCORE_EDIT_TOKEN_KEY_PREFIX = "lulu-snake-edit-token-";
+const ENABLE_LEGACY_SUPABASE_FALLBACK = true;
 const MAX_HIGHSCORES = 5;
 const RAGE_DURATION_MS = 15000;
 const RAGE_POPUP_MS = 4200;
@@ -569,6 +570,30 @@ async function fetchTopHighscoresFromServer() {
   return sortHighscores(rows.map(normalizeRemoteRow));
 }
 
+function createSupabaseHttpError(scope, response, payload) {
+  const detail = payload && typeof payload === "object"
+    ? String(payload.message || payload.details || payload.hint || "")
+    : "";
+  const err = new Error(detail ? `${scope} (${response.status}): ${detail}` : `${scope} (${response.status})`);
+  err.status = response.status;
+  if (payload && typeof payload === "object") {
+    err.code = String(payload.code || "");
+    err.details = String(payload.details || payload.hint || "");
+  }
+  return err;
+}
+
+function shouldFallbackToLegacySupabase(error) {
+  if (!ENABLE_LEGACY_SUPABASE_FALLBACK) return false;
+  const status = Number(error?.status || 0);
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.code || ""}`.toLowerCase();
+  if (status === 404) return true;
+  if (status !== 400) return false;
+  return text.includes("could not find the function")
+    || text.includes("function public.")
+    || text.includes("does not exist");
+}
+
 async function callSupabaseRpc(rpcName, payload) {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${rpcName}`, {
     method: "POST",
@@ -578,32 +603,100 @@ async function callSupabaseRpc(rpcName, payload) {
     }),
     body: JSON.stringify(payload),
   });
-  if (!response.ok) {
-    throw new Error(`RPC ${rpcName} failed (${response.status})`);
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    data = null;
   }
-  const data = await response.json();
+  if (!response.ok) {
+    throw createSupabaseHttpError(`RPC ${rpcName} failed`, response, data);
+  }
   if (Array.isArray(data)) return data[0] || null;
   return data || null;
 }
 
-async function insertHighscoreOnServer(name, score, editToken) {
-  const raw = await callSupabaseRpc(SUPABASE_CREATE_SCORE_RPC, {
-    p_name: normalizeName(name),
-    p_score: normalizeScore(score),
-    p_edit_token: String(editToken || ""),
+async function insertHighscoreLegacyOnServer(name, score) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+    method: "POST",
+    headers: supabaseHeaders({
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({
+      name: normalizeName(name),
+      score: normalizeScore(score),
+    }),
   });
-  return raw ? normalizeRemoteRow(raw) : null;
+  let rows = null;
+  try {
+    rows = await response.json();
+  } catch {
+    rows = null;
+  }
+  if (!response.ok) {
+    throw createSupabaseHttpError("Legacy insert failed", response, rows);
+  }
+  const first = Array.isArray(rows) ? rows[0] : rows;
+  return first ? normalizeRemoteRow(first) : null;
+}
+
+async function insertHighscoreOnServer(name, score, editToken) {
+  try {
+    const raw = await callSupabaseRpc(SUPABASE_CREATE_SCORE_RPC, {
+      p_name: normalizeName(name),
+      p_score: normalizeScore(score),
+      p_edit_token: String(editToken || ""),
+    });
+    return raw ? normalizeRemoteRow(raw) : null;
+  } catch (error) {
+    if (!shouldFallbackToLegacySupabase(error)) throw error;
+    console.warn("RPC create_highscore unavailable, falling back to legacy insert.");
+    return insertHighscoreLegacyOnServer(name, score);
+  }
+}
+
+async function updateHighscoreNameLegacyOnServer(id, name) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: supabaseHeaders({
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    }),
+    body: JSON.stringify({ name: normalizeName(name) }),
+  });
+  let rows = null;
+  try {
+    rows = await response.json();
+  } catch {
+    rows = null;
+  }
+  if (!response.ok) {
+    throw createSupabaseHttpError("Legacy name update failed", response, rows);
+  }
+  const first = Array.isArray(rows) ? rows[0] : rows;
+  return first ? normalizeRemoteRow(first) : null;
 }
 
 async function updateHighscoreNameOnServer(id, name, editToken) {
-  const token = String(editToken || "");
-  if (!token) return null;
-  const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
-    p_id: String(id),
-    p_name: normalizeName(name),
-    p_edit_token: token,
-  });
-  return raw ? normalizeRemoteRow(raw) : null;
+  const token = String(editToken || "").trim();
+  if (token) {
+    try {
+      const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
+        p_id: String(id),
+        p_name: normalizeName(name),
+        p_edit_token: token,
+      });
+      return raw ? normalizeRemoteRow(raw) : null;
+    } catch (error) {
+      if (!shouldFallbackToLegacySupabase(error)) throw error;
+      console.warn("RPC rename_highscore unavailable, falling back to legacy update.");
+    }
+  } else if (!ENABLE_LEGACY_SUPABASE_FALLBACK) {
+    return null;
+  }
+
+  return updateHighscoreNameLegacyOnServer(id, name);
 }
 
 async function refreshHighscoresFromServer() {
@@ -1466,7 +1559,6 @@ function updateHighscoreName(id, rawName) {
   saveLastName(normalized);
   if (!id.startsWith("local-")) {
     const token = readHighscoreEditToken(id);
-    if (!token) return;
     updateHighscoreNameOnServer(id, normalized, token).then((updated) => {
       if (!updated) return;
       const currentIdx = highscores.findIndex((entry) => entry.id === id);
