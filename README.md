@@ -44,8 +44,10 @@ Then open:
 - Optional rage assets can be provided as `assets/rage-pee.png` (pee treat) and `assets/rage-dog.png` (running/peeing dog).
 - Occasional chase events now spawn an Afghan hound hunter for about `45s`.
 - Hunter is now `Askaban` only (black Afghan) with warning tag: `OH NO WINDHUND LADY LOST CONTROL`.
-- Askaban movement uses momentum-led chasing with light wandering so it looks more natural but still actively hunts.
-- Askaban chase speed is faster than before, while still tuned to remain slightly slower than the snake speed.
+- Askaban movement now uses a stronger predictive pursuit with less random drifting for tighter, more natural chasing.
+- Askaban chase speed is slightly faster and adaptive (faster catch-up when far away, steadier when close).
+- After each Askaban event ends, at least `12` treats must be eaten before another chase can trigger.
+- The in-world `ASKABAN` text above the chasing sprite has been removed for cleaner visuals.
 - Optional dedicated hunter asset: `assets/chaser-askaban.png`.
 - Chase music now uses `assets/askaban-song.mp3` during active Askaban events.
 - The `OH NO WINDHUND LADY LOST CONTROL` alert now stays longer on screen and uses a stronger pop/pulse animation for higher visibility.

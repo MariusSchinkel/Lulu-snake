@@ -48,10 +48,11 @@ const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
-const CHASER_SPEED_FACTOR = 1.12;
-const CHASER_STEP_EXTRA_MS = 10;
+const CHASER_SPEED_FACTOR = 0.94;
+const CHASER_STEP_EXTRA_MS = 6;
 const CHASER_CHANCE_PCT = 16;
-const CHASER_FORCE_AFTER_TREATS = 10;
+const CHASER_FORCE_AFTER_TREATS = 20;
+const CHASER_RECOVERY_TREATS = 12;
 const CHASER_ALERT_MS = 4200;
 const CHASER_MUSIC_VOLUME = 0.82;
 const CHASER_OPTIONS = [
@@ -95,6 +96,7 @@ let chaserMusicActive = false;
 let bgPausedForChaser = false;
 let treatsSinceRage = 0;
 let treatsSinceChaser = 0;
+let chaserRecoveryTreatsRemaining = 0;
 let activeChaser = null;
 let chaserAlertTimer = null;
 let bgFadeRaf = null;
@@ -284,6 +286,18 @@ function hideChaserAlert() {
   chaserAlert.classList.remove("pop");
 }
 
+function getDirectionToward(from, to, size) {
+  const dx = wrappedAxisDelta(from.x, to.x, size);
+  const dy = wrappedAxisDelta(from.y, to.y, size);
+  if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) {
+    return { dx: Math.sign(dx), dy: 0 };
+  }
+  if (dy !== 0) {
+    return { dx: 0, dy: Math.sign(dy) };
+  }
+  return { dx: 1, dy: 0 };
+}
+
 function showChaserAlert(name) {
   if (!chaserAlert || !chaserNameEl) return;
   hideChaserAlert();
@@ -300,13 +314,24 @@ function showChaserAlert(name) {
 }
 
 function clearActiveChaser() {
+  const hadActiveChaser = !!activeChaser;
   activeChaser = null;
   stopChaserMusic();
+  if (hadActiveChaser) {
+    treatsSinceChaser = 0;
+    chaserRecoveryTreatsRemaining = CHASER_RECOVERY_TREATS;
+  }
 }
 
 function getChaserStepMs() {
-  // Keep Askaban slower than the snake tick while still responsive.
-  return Math.max(96, Math.round(getTickMs() * CHASER_SPEED_FACTOR + CHASER_STEP_EXTRA_MS));
+  // Askaban should feel fast, but still with room for player recovery.
+  let factor = CHASER_SPEED_FACTOR;
+  if (activeChaser && state.snake[0]) {
+    const distance = wrappedDistance(activeChaser.pos, state.snake[0], state.gridSize);
+    if (distance > 7) factor -= 0.1;
+    if (distance < 3) factor += 0.04;
+  }
+  return Math.max(82, Math.round(getTickMs() * Math.max(0.78, factor) + CHASER_STEP_EXTRA_MS));
 }
 
 function spawnChaser() {
@@ -314,17 +339,17 @@ function spawnChaser() {
   if (isRageMode() || rageTreatActive) return false;
   const pick = CHASER_OPTIONS[state.rngSeed % CHASER_OPTIONS.length];
   const spawn = chooseChaserSpawnCell();
+  const initialDir = getDirectionToward(spawn, state.snake[0], state.gridSize);
   const now = performance.now();
   activeChaser = {
     name: pick.name,
     pos: spawn,
-    dir: { dx: 1, dy: 0 },
+    dir: initialDir,
     remainingMs: CHASER_DURATION_MS,
     lastUpdateTs: now,
     nextMoveTs: now + getChaserStepMs(),
     wanderSteps: 0,
   };
-  treatsSinceChaser = 0;
   showChaserAlert(pick.name);
   startChaserMusic();
   return true;
@@ -333,10 +358,21 @@ function spawnChaser() {
 function maybeSpawnChaser() {
   if (activeChaser || !gameStarted || !state.alive) return;
   if (isRageMode() || rageTreatActive) return;
+  if (chaserRecoveryTreatsRemaining > 0) return;
   const force = treatsSinceChaser >= CHASER_FORCE_AFTER_TREATS;
   if (force || state.rngSeed % 100 < CHASER_CHANCE_PCT) {
     spawnChaser();
   }
+}
+
+function getChaserTargetCell(head, size) {
+  if (!activeChaser) return head;
+  const distance = wrappedDistance(activeChaser.pos, head, size);
+  const lookAhead = Math.min(3, Math.max(1, Math.floor(distance / 5) + 1));
+  return {
+    x: wrapCoord(head.x + state.dir.dx * lookAhead, size),
+    y: wrapCoord(head.y + state.dir.dy * lookAhead, size),
+  };
 }
 
 function getChaserStepToward(head, pos, size) {
@@ -346,7 +382,12 @@ function getChaserStepToward(head, pos, size) {
     { dx: 0, dy: 1 },
     { dx: 0, dy: -1 },
   ];
-  const currentDist = wrappedDistance(pos, head, size);
+  const target = getChaserTargetCell(head, size);
+  const currentHeadDist = wrappedDistance(pos, head, size);
+  const currentTargetDist = wrappedDistance(pos, target, size);
+  const xGap = Math.abs(wrappedAxisDelta(pos.x, target.x, size));
+  const yGap = Math.abs(wrappedAxisDelta(pos.y, target.y, size));
+  const dominantAxis = xGap >= yGap ? "x" : "y";
   let best = null;
 
   for (const step of directions) {
@@ -354,23 +395,27 @@ function getChaserStepToward(head, pos, size) {
       x: wrapCoord(pos.x + step.dx, size),
       y: wrapCoord(pos.y + step.dy, size),
     };
-    const nextDist = wrappedDistance(next, head, size);
+    const nextHeadDist = wrappedDistance(next, head, size);
+    const nextTargetDist = wrappedDistance(next, target, size);
     const forward = step.dx === activeChaser.dir.dx && step.dy === activeChaser.dir.dy;
     const reverse = step.dx === -activeChaser.dir.dx && step.dy === -activeChaser.dir.dy;
     const hitsBody = state.snake.slice(1).some((segment) => sameCell(segment, next));
     const inWanderMode = activeChaser.wanderSteps > 0;
 
-    let score = Math.random() * (inWanderMode ? 0.95 : 0.35);
-    score += forward ? 1.1 : 0;
-    score -= reverse ? 1.2 : 0;
+    let score = Math.random() * (inWanderMode ? 0.2 : 0.07);
+    score += forward ? 1.35 : 0;
+    score -= reverse ? 2.6 : 0;
     if (!inWanderMode) {
-      score += (currentDist - nextDist) * 1.35;
-      const preferredDist = 2.2;
-      score += (Math.abs(currentDist - preferredDist) - Math.abs(nextDist - preferredDist)) * 0.55;
+      score += (currentTargetDist - nextTargetDist) * 1.95;
+      score += (currentHeadDist - nextHeadDist) * 1.05;
     } else {
-      score += (currentDist - nextDist) * 0.55;
+      score += (currentTargetDist - nextTargetDist) * 0.65;
+      score += (currentHeadDist - nextHeadDist) * 0.45;
     }
-    if (hitsBody && !sameCell(next, head)) score -= 0.75;
+    if (!forward && !reverse) score -= 0.12;
+    if (dominantAxis === "x" && step.dx !== 0) score += 0.24;
+    if (dominantAxis === "y" && step.dy !== 0) score += 0.24;
+    if (hitsBody && !sameCell(next, head)) score -= 1.4;
 
     if (!best || score > best.score) {
       best = { step, score };
@@ -399,8 +444,8 @@ function updateChaserState() {
   }
 
   if (now < activeChaser.nextMoveTs) return;
-  if (activeChaser.wanderSteps <= 0 && Math.random() < 0.14) {
-    activeChaser.wanderSteps = 1 + Math.floor(Math.random() * 2);
+  if (activeChaser.wanderSteps <= 0 && Math.random() < 0.06) {
+    activeChaser.wanderSteps = 1;
   }
   const step = getChaserStepToward(head, activeChaser.pos, state.gridSize);
   if (step.dx !== 0 || step.dy !== 0) {
@@ -1200,14 +1245,6 @@ function drawGrid() {
       ctx.stroke();
     }
     ctx.restore();
-
-    ctx.save();
-    ctx.font = `${Math.max(10, size * 0.22)}px "SF Pro Text", Arial, sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    ctx.fillStyle = "rgba(24, 14, 6, 0.95)";
-    ctx.fillText(activeChaser.name, centerX, centerY - chaserSize * 0.62);
-    ctx.restore();
   }
 }
 
@@ -1246,7 +1283,12 @@ function tick() {
   }
   updateScore();
   if (state.score !== prevScore) {
-    if (!ateRageTreat) treatsSinceChaser += 1;
+    if (!ateRageTreat && !activeChaser) {
+      treatsSinceChaser += 1;
+      if (chaserRecoveryTreatsRemaining > 0) {
+        chaserRecoveryTreatsRemaining = Math.max(0, chaserRecoveryTreatsRemaining - 1);
+      }
+    }
     if (ateRageTreat) {
       activateLuluRage();
     } else if (!isRageMode()) {
@@ -1325,6 +1367,7 @@ function resetGame() {
   state = { ...state, pointsPerFood: 1 };
   treatsSinceRage = 0;
   treatsSinceChaser = 0;
+  chaserRecoveryTreatsRemaining = 0;
   rageTreatActive = false;
   rageTreatReady = false;
   rageRunner = null;
