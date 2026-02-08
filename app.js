@@ -89,6 +89,8 @@ let rageMusicActive = false;
 let audioMuted = localStorage.getItem(AUDIO_MUTED_KEY) === "1";
 let rageAudioPrimed = false;
 let ragePlayPending = false;
+let chaserAudioPrimed = false;
+let chaserPlayPending = false;
 let chaserMusicActive = false;
 let bgPausedForChaser = false;
 let treatsSinceRage = 0;
@@ -129,6 +131,17 @@ function playRageTrack() {
   });
 }
 
+function playChaserTrack() {
+  if (audioMuted || isRageMode()) return;
+  chaserMusic.play().then(() => {
+    chaserMusicActive = true;
+    chaserPlayPending = false;
+  }).catch(() => {
+    chaserMusicActive = false;
+    chaserPlayPending = true;
+  });
+}
+
 function startChaserMusic() {
   if (audioMuted || isRageMode()) return;
   if (!bgMusic.paused) {
@@ -138,11 +151,8 @@ function startChaserMusic() {
   chaserMusic.pause();
   chaserMusic.currentTime = 0;
   chaserMusic.volume = CHASER_MUSIC_VOLUME;
-  chaserMusic.play().then(() => {
-    chaserMusicActive = true;
-  }).catch(() => {
-    chaserMusicActive = false;
-  });
+  chaserPlayPending = true;
+  playChaserTrack();
 }
 
 function stopChaserMusic() {
@@ -151,6 +161,7 @@ function stopChaserMusic() {
     chaserMusic.currentTime = 0;
   }
   chaserMusicActive = false;
+  chaserPlayPending = false;
   if (bgPausedForChaser) {
     bgPausedForChaser = false;
     if (!audioMuted && !isRageMode()) {
@@ -183,10 +194,36 @@ function primeRageTrackIfNeeded() {
   });
 }
 
+function primeChaserTrackIfNeeded() {
+  if (audioMuted || chaserAudioPrimed) return;
+  const wasMuted = chaserMusic.muted;
+  const previousVolume = chaserMusic.volume;
+  chaserMusic.pause();
+  chaserMusic.currentTime = 0;
+  chaserMusic.muted = true;
+  chaserMusic.volume = 0;
+  chaserMusic.play().then(() => {
+    chaserMusic.pause();
+    chaserMusic.currentTime = 0;
+    chaserMusic.muted = wasMuted;
+    chaserMusic.volume = previousVolume;
+    chaserAudioPrimed = true;
+    if (chaserPlayPending && activeChaser && !isRageMode() && !audioMuted) {
+      playChaserTrack();
+    }
+  }).catch(() => {
+    chaserMusic.muted = wasMuted;
+    chaserMusic.volume = previousVolume;
+  });
+}
+
 function updateAudioButton() {
   if (!audioToggle) return;
-  audioToggle.textContent = audioMuted ? "Audio Off" : "Audio On";
+  audioToggle.textContent = audioMuted ? "🔇" : "🔊";
+  audioToggle.setAttribute("aria-label", audioMuted ? "Audio Off" : "Audio On");
+  audioToggle.setAttribute("title", audioMuted ? "Audio Off" : "Audio On");
   audioToggle.setAttribute("aria-pressed", String(!audioMuted));
+  audioToggle.classList.toggle("muted", audioMuted);
 }
 
 function normalizeName(rawName) {
@@ -502,6 +539,7 @@ function unlockAudioIfNeeded() {
   audioUnlocked = true;
   if (audioMuted) return;
   primeRageTrackIfNeeded();
+  primeChaserTrackIfNeeded();
   if (bgMusic.paused) {
     bgMusic.currentTime = 0;
     bgMusic.play().catch(() => {
@@ -548,6 +586,8 @@ function setAudioMuted(nextMuted) {
     chaserMusic.pause();
     rageMusicActive = false;
     chaserMusicActive = false;
+    ragePlayPending = false;
+    chaserPlayPending = false;
     bgPausedForChaser = false;
     if (rageFadeRaf) cancelAnimationFrame(rageFadeRaf);
     rageFadeRaf = null;
@@ -559,6 +599,7 @@ function setAudioMuted(nextMuted) {
       bgMusic.play().catch(() => {});
     }
     primeRageTrackIfNeeded();
+    primeChaserTrackIfNeeded();
   }
   updateAudioButton();
 }
@@ -1698,18 +1739,28 @@ function activateLuluRage() {
   }, RAGE_POPUP_MS);
 }
 
+function retryPendingMusicPlayback() {
+  if (audioMuted) return;
+  if (ragePlayPending && isRageMode()) {
+    primeRageTrackIfNeeded();
+    playRageTrack();
+    return;
+  }
+  if (chaserPlayPending && activeChaser && !isRageMode()) {
+    primeChaserTrackIfNeeded();
+    playChaserTrack();
+  }
+}
+
 document.addEventListener("pointerdown", unlockAudioIfNeeded, { once: true });
 document.addEventListener("keydown", unlockAudioIfNeeded, { once: true });
-document.addEventListener("pointerdown", () => {
-  if (!ragePlayPending || !isRageMode() || audioMuted) return;
-  primeRageTrackIfNeeded();
-  playRageTrack();
-});
-document.addEventListener("keydown", () => {
-  if (!ragePlayPending || !isRageMode() || audioMuted) return;
-  primeRageTrackIfNeeded();
-  playRageTrack();
-});
+document.addEventListener("touchstart", unlockAudioIfNeeded, { once: true, passive: true });
+document.addEventListener("click", unlockAudioIfNeeded, { once: true });
+
+document.addEventListener("pointerdown", retryPendingMusicPlayback);
+document.addEventListener("keydown", retryPendingMusicPlayback);
+document.addEventListener("touchstart", retryPendingMusicPlayback, { passive: true });
+document.addEventListener("click", retryPendingMusicPlayback);
 
 audioToggle.addEventListener("click", () => {
   unlockAudioIfNeeded();

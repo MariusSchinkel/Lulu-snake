@@ -20,7 +20,7 @@ Then open:
 - `Swipe anywhere on screen` (touch/pen): move
 - `Space`: pause/resume
 - `R`: restart
-- `Audio On/Off` button toggles music
+- `Speaker` button toggles music (`🔊` on, `🔇` muted)
 
 ## Gameplay Notes
 
@@ -36,6 +36,7 @@ Then open:
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 - Swipe threshold is lower on mobile screens for quicker touch direction changes.
 - Rage audio now primes `lulu-rage.mp3` on user gesture and retries during active rage if a mobile autoplay block occurs.
+- Askaban audio now has dedicated mobile priming and retry-on-gesture handling to improve chase-track reliability.
 - During Lulu-Rage, background music is paused and resumes after rage ends to avoid overlapping tracks.
 - Rage trigger now uses a run-in dog event: a dog enters, pees on the board, and only then the special pee treat becomes edible.
 - During Lulu-Rage, all food is rendered as dog-pee style treats.
