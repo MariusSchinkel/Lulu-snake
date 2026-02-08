@@ -33,6 +33,11 @@ const SUPABASE_URL = "https://tctrtklwqmynkfssipgc.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRjdHJ0a2x3cW15bmtmc3NpcGdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0NjU0MTAsImV4cCI6MjA4NjA0MTQxMH0.Hi640Ia4HN4Unjvay5hZ91yTrZUB9DVRLXushyMuh_w";
 const SUPABASE_TABLE = "lulu_scores";
+const SUPABASE_CREATE_SCORE_RPC = "create_highscore";
+const SUPABASE_RENAME_SCORE_RPC = "rename_highscore";
+const MAX_PLAYER_NAME_LENGTH = 24;
+const MAX_SUBMIT_SCORE = 100000;
+const HIGHSCORE_EDIT_TOKEN_KEY_PREFIX = "lulu-snake-edit-token-";
 const MAX_HIGHSCORES = 5;
 const RAGE_DURATION_MS = 15000;
 const RAGE_POPUP_MS = 4200;
@@ -104,6 +109,7 @@ let rageFadeRaf = null;
 let swipePointerId = null;
 let swipeLastX = 0;
 let swipeLastY = 0;
+const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
 
 const bgMusic = new Audio("./assets/bg-music.mp3");
@@ -229,8 +235,73 @@ function updateAudioButton() {
 }
 
 function normalizeName(rawName) {
-  const trimmed = String(rawName || "").trim();
-  return trimmed || "Player 1";
+  const sanitized = String(rawName || "")
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_PLAYER_NAME_LENGTH);
+  return sanitized || "Player 1";
+}
+
+function normalizeScore(rawScore) {
+  return Math.max(0, Math.min(MAX_SUBMIT_SCORE, Math.floor(Number(rawScore) || 0)));
+}
+
+function editTokenStorageKey(id) {
+  return `${HIGHSCORE_EDIT_TOKEN_KEY_PREFIX}${id}`;
+}
+
+function createEditToken() {
+  try {
+    if (window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(24);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+  } catch {
+    // Fall through to non-crypto fallback.
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+}
+
+function storeHighscoreEditToken(id, token) {
+  if (!id || !token) return;
+  highscoreEditTokens.set(id, token);
+  try {
+    localStorage.setItem(editTokenStorageKey(id), token);
+  } catch {
+    // Ignore storage errors (private mode / quota).
+  }
+}
+
+function readHighscoreEditToken(id) {
+  if (!id) return "";
+  const inMemory = highscoreEditTokens.get(id);
+  if (inMemory) return inMemory;
+  try {
+    const stored = localStorage.getItem(editTokenStorageKey(id)) || "";
+    if (stored) highscoreEditTokens.set(id, stored);
+    return stored;
+  } catch {
+    return "";
+  }
+}
+
+function clearHighscoreEditToken(id) {
+  if (!id) return;
+  highscoreEditTokens.delete(id);
+  try {
+    localStorage.removeItem(editTokenStorageKey(id));
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+function moveHighscoreEditToken(fromId, toId) {
+  const token = readHighscoreEditToken(fromId);
+  if (!token || !toId) return;
+  storeHighscoreEditToken(toId, token);
+  clearHighscoreEditToken(fromId);
 }
 
 function sameCell(a, b) {
@@ -478,7 +549,7 @@ function normalizeRemoteRow(row) {
   return {
     id: String(row.id),
     name: normalizeName(row.name),
-    score: Math.max(0, Number(row.score) || 0),
+    score: normalizeScore(row.score),
     createdAt: Date.parse(row.created_at) || Date.now(),
   };
 }
@@ -498,37 +569,41 @@ async function fetchTopHighscoresFromServer() {
   return sortHighscores(rows.map(normalizeRemoteRow));
 }
 
-async function insertHighscoreOnServer(name, score) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
+async function callSupabaseRpc(rpcName, payload) {
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${rpcName}`, {
     method: "POST",
     headers: supabaseHeaders({
       "Content-Type": "application/json",
       Prefer: "return=representation",
     }),
-    body: JSON.stringify({
-      name: normalizeName(name),
-      score: Math.max(0, Math.floor(score)),
-    }),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    throw new Error(`Failed to insert highscore (${response.status})`);
+    throw new Error(`RPC ${rpcName} failed (${response.status})`);
   }
-  const rows = await response.json();
-  return rows[0] ? normalizeRemoteRow(rows[0]) : null;
+  const data = await response.json();
+  if (Array.isArray(data)) return data[0] || null;
+  return data || null;
 }
 
-async function updateHighscoreNameOnServer(id, name) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: supabaseHeaders({
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    }),
-    body: JSON.stringify({ name: normalizeName(name) }),
+async function insertHighscoreOnServer(name, score, editToken) {
+  const raw = await callSupabaseRpc(SUPABASE_CREATE_SCORE_RPC, {
+    p_name: normalizeName(name),
+    p_score: normalizeScore(score),
+    p_edit_token: String(editToken || ""),
   });
-  if (!response.ok) {
-    throw new Error(`Failed to update highscore name (${response.status})`);
-  }
+  return raw ? normalizeRemoteRow(raw) : null;
+}
+
+async function updateHighscoreNameOnServer(id, name, editToken) {
+  const token = String(editToken || "");
+  if (!token) return null;
+  const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
+    p_id: String(id),
+    p_name: normalizeName(name),
+    p_edit_token: token,
+  });
+  return raw ? normalizeRemoteRow(raw) : null;
 }
 
 async function refreshHighscoresFromServer() {
@@ -1390,7 +1465,16 @@ function updateHighscoreName(id, rawName) {
   applyHighscores(highscores);
   saveLastName(normalized);
   if (!id.startsWith("local-")) {
-    updateHighscoreNameOnServer(id, normalized).catch((error) => {
+    const token = readHighscoreEditToken(id);
+    if (!token) return;
+    updateHighscoreNameOnServer(id, normalized, token).then((updated) => {
+      if (!updated) return;
+      const currentIdx = highscores.findIndex((entry) => entry.id === id);
+      if (currentIdx < 0) return;
+      highscores[currentIdx] = { ...highscores[currentIdx], name: updated.name };
+      applyHighscores(highscores);
+      renderHighscores();
+    }).catch((error) => {
       console.warn("Unable to sync highscore name update.", error);
     });
   }
@@ -1447,14 +1531,17 @@ function isTopFiveScore(score) {
 }
 
 function recordHighscore(score, rawName) {
-  if (score <= 0) return null;
+  const normalizedScore = normalizeScore(score);
+  if (normalizedScore <= 0) return null;
   const name = saveLastName(rawName);
   const entry = {
     id: `local-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     name,
-    score,
+    score: normalizedScore,
     createdAt: Date.now(),
   };
+  const editToken = createEditToken();
+  storeHighscoreEditToken(entry.id, editToken);
   const nextScores = sortHighscores([...highscores, entry]);
   const idx = nextScores.findIndex((item) => item.id === entry.id);
   if (idx < 0) return null;
@@ -1463,8 +1550,9 @@ function recordHighscore(score, rawName) {
   void (async () => {
     try {
       const currentEntry = highscores.find((item) => item.id === entry.id) || entry;
-      const remoteEntry = await insertHighscoreOnServer(currentEntry.name, currentEntry.score);
+      const remoteEntry = await insertHighscoreOnServer(currentEntry.name, currentEntry.score, editToken);
       if (!remoteEntry) return;
+      moveHighscoreEditToken(entry.id, remoteEntry.id);
       const latestLocalEntry = highscores.find((item) => item.id === entry.id) || currentEntry;
       const localName = normalizeName(latestLocalEntry.name);
       const merged = highscores.filter((item) => item.id !== entry.id);
@@ -1475,7 +1563,8 @@ function recordHighscore(score, rawName) {
       }
       renderHighscores();
       if (localName !== remoteEntry.name) {
-        await updateHighscoreNameOnServer(remoteEntry.id, localName);
+        const token = readHighscoreEditToken(remoteEntry.id);
+        await updateHighscoreNameOnServer(remoteEntry.id, localName, token);
       }
       await refreshHighscoresFromServer();
     } catch (error) {
