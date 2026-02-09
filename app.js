@@ -606,6 +606,12 @@ function shouldFallbackToLegacySupabase(error) {
     || text.includes("does not exist");
 }
 
+function isDigestFunctionMissingError(error) {
+  const text = `${error?.message || ""} ${error?.details || ""} ${error?.code || ""}`.toLowerCase();
+  return text.includes("function digest(text, unknown) does not exist")
+    || text.includes("digest(text, unknown)");
+}
+
 async function callSupabaseRpc(rpcName, payload) {
   const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${rpcName}`, {
     method: "POST",
@@ -662,6 +668,9 @@ async function insertHighscoreOnServer(name, score, editToken) {
     });
     return raw ? normalizeRemoteRow(raw) : null;
   } catch (error) {
+    if (isDigestFunctionMissingError(error)) {
+      console.error("Supabase RPC misconfigured: digest() is unavailable in create_highscore. Re-run README Supabase SQL fix.");
+    }
     if (!shouldFallbackToLegacySupabase(error)) throw error;
     console.warn("RPC create_highscore unavailable, falling back to legacy insert.");
     return insertHighscoreLegacyOnServer(name, score);
@@ -704,6 +713,9 @@ async function updateHighscoreNameOnServer(id, name, editToken) {
       // RPC can return no row when token/hash mismatch during partial migrations.
       return updateHighscoreNameLegacyOnServer(id, name);
     } catch (error) {
+      if (isDigestFunctionMissingError(error)) {
+        console.error("Supabase RPC misconfigured: digest() is unavailable in rename_highscore. Re-run README Supabase SQL fix.");
+      }
       if (!shouldFallbackToLegacySupabase(error)) throw error;
       console.warn("RPC rename_highscore unavailable, falling back to legacy update.");
     }

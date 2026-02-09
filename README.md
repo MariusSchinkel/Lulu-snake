@@ -95,7 +95,7 @@ alter table public.lulu_scores
   add column if not exists edit_token_hash text;
 
 update public.lulu_scores
-set edit_token_hash = encode(digest(gen_random_uuid()::text, 'sha256'), 'hex')
+set edit_token_hash = encode(extensions.digest(gen_random_uuid()::text, 'sha256'), 'hex')
 where edit_token_hash is null;
 
 alter table public.lulu_scores
@@ -125,7 +125,7 @@ create or replace function public.create_highscore(
 returns setof public.lulu_scores
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_name text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 24);
@@ -139,7 +139,7 @@ begin
   if char_length(v_token) < 24 then
     raise exception 'invalid edit token';
   end if;
-  v_hash := encode(digest(v_token, 'sha256'), 'hex');
+  v_hash := encode(extensions.digest(v_token, 'sha256'), 'hex');
 
   return query
   insert into public.lulu_scores (name, score, edit_token_hash)
@@ -157,11 +157,11 @@ create or replace function public.rename_highscore(
 returns setof public.lulu_scores
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_name text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 24);
-  v_hash text := encode(digest(coalesce(p_edit_token, ''), 'sha256'), 'hex');
+  v_hash text := encode(extensions.digest(coalesce(p_edit_token, ''), 'sha256'), 'hex');
 begin
   if char_length(v_name) = 0 then
     v_name := 'Player 1';
