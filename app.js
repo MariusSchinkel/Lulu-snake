@@ -77,7 +77,7 @@ const DUEL_ROOM_CODE_KEY = "lulu-snake-duel-room";
 const DUEL_SYNC_INTERVAL_MS = 180;
 const DUEL_MAX_STALE_MS = 3600;
 const DUEL_START_DELAY_MS = 1500;
-const DUEL_TARGET_SCORE = 12;
+const DUEL_TARGET_SCORE = 20;
 const DUEL_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DUEL_CODE_LEN = 6;
 const DUEL_SNAPSHOT_VERSION = 1;
@@ -753,6 +753,20 @@ function handleDuelSnapshot(payload) {
   updateOpponentScore(score);
 }
 
+function getFreshRemoteSnake() {
+  if (!duel.remoteState || !Array.isArray(duel.remoteState.snake)) return null;
+  if (Date.now() - duel.remoteState.ts > DUEL_MAX_STALE_MS) return null;
+  return duel.remoteState.snake;
+}
+
+function isLocalHeadTouchingRemoteSnake() {
+  if (!isDuelRoundActive() || !state?.snake?.[0]) return false;
+  const remoteSnake = getFreshRemoteSnake();
+  if (!remoteSnake) return false;
+  const head = state.snake[0];
+  return remoteSnake.some((segment) => segment.x === head.x && segment.y === head.y);
+}
+
 function clearDuelRuntimeState() {
   clearTimeout(duelPendingStartTimer);
   duelPendingStartTimer = null;
@@ -920,8 +934,12 @@ async function joinDuelRoom(rawCode) {
           finishDuelRound("Askaban-friendly win. Opponent crashed.", null);
           return;
         }
+        if (remoteResult === "lose-touch") {
+          finishDuelRound("You win. Opponent touched your snake.", null);
+          return;
+        }
         if (remoteResult === "win-target") {
-          finishDuelRound("You lost the race. Opponent reached 12 treats.", null);
+          finishDuelRound(`You lost the race. Opponent reached ${DUEL_TARGET_SCORE} treats.`, null);
         }
       });
 
@@ -1563,18 +1581,20 @@ function drawGrid() {
   };
 
   const drawRemoteSnake = () => {
-    if (!isDuelRoundActive() || !duel.remoteState) return;
-    if (Date.now() - duel.remoteState.ts > DUEL_MAX_STALE_MS) {
-      duel.remoteState = null;
-      updateOpponentScore(0);
+    if (!isDuelRoundActive()) return;
+    const remoteSnake = getFreshRemoteSnake();
+    if (!remoteSnake) {
+      if (duel.remoteState) {
+        duel.remoteState = null;
+        updateOpponentScore(0);
+      }
       return;
     }
-    const remoteSnake = duel.remoteState.snake;
     if (!Array.isArray(remoteSnake) || remoteSnake.length === 0) return;
-    const base = "#2f2a23";
-    const glow = "#f4e6c8";
+    const base = "#325da0";
+    const glow = "#e9f5ff";
     ctx.save();
-    ctx.globalAlpha = 0.6;
+    ctx.globalAlpha = 0.82;
     for (let i = remoteSnake.length - 1; i >= 0; i -= 1) {
       const seg = remoteSnake[i];
       const cx = seg.x * size + size / 2;
@@ -1895,6 +1915,13 @@ function tick() {
     advanceBodyWalkFrame();
     updateScore();
     maybeBroadcastDuelSnapshot();
+
+    if (isLocalHeadTouchingRemoteSnake()) {
+      maybeBroadcastDuelSnapshot(true);
+      finishDuelRound("You touched the opponent snake. You lose this round.", "lose-touch");
+      drawGrid();
+      return;
+    }
 
     if (state.score >= DUEL_TARGET_SCORE) {
       maybeBroadcastDuelSnapshot(true);
@@ -2276,10 +2303,10 @@ function openMenu(mode) {
       menuText.textContent = duel.resultText || "Round finished.";
     } else if (duel.connected) {
       menuText.textContent = isDuelReadyToStart()
-        ? "Room ready. Press Start 1v1."
-        : "Create or join a room, then wait for your opponent.";
+        ? `Room ready. Press Start 1v1. First to ${DUEL_TARGET_SCORE}, no touching.`
+        : `Create or join a room, then wait for your opponent. First to ${DUEL_TARGET_SCORE}, no touching.`;
     } else {
-      menuText.textContent = "Create or join a room to play realtime 1v1.";
+      menuText.textContent = `Create or join a room to play realtime 1v1. First to ${DUEL_TARGET_SCORE}, no touching.`;
     }
     updateModeButtons();
     return;
