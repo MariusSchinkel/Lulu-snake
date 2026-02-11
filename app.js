@@ -3,6 +3,8 @@ import { createGameState, setDirection, stepGame } from "./game.js";
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const scoreEl = document.getElementById("score");
+const opponentScoreboardEl = document.getElementById("opponent-scoreboard");
+const opponentScoreEl = document.getElementById("opponent-score");
 const rageIndicator = document.getElementById("rage-indicator");
 const rageTimer = document.getElementById("rage-timer");
 const overlay = document.getElementById("overlay");
@@ -14,6 +16,13 @@ const nameEntry = document.getElementById("name-entry");
 const nameEntryInput = document.getElementById("name-entry-input");
 const saveScoreButton = document.getElementById("save-score");
 const startGameButton = document.getElementById("start-game");
+const modeSingleButton = document.getElementById("mode-single");
+const modeDuelButton = document.getElementById("mode-duel");
+const duelPanel = document.getElementById("duel-panel");
+const duelRoomInput = document.getElementById("duel-room-input");
+const duelCreateButton = document.getElementById("duel-create");
+const duelJoinButton = document.getElementById("duel-join");
+const duelStatusEl = document.getElementById("duel-status");
 const ragePopup = document.getElementById("rage-popup");
 const chaserAlert = document.getElementById("chaser-alert");
 const chaserNameEl = document.getElementById("chaser-name");
@@ -64,10 +73,19 @@ const CHASER_MUSIC_VOLUME = 0.82;
 const CHASER_OPTIONS = [
   { name: "Askaban" },
 ];
+const DUEL_ROOM_CODE_KEY = "lulu-snake-duel-room";
+const DUEL_SYNC_INTERVAL_MS = 180;
+const DUEL_MAX_STALE_MS = 3600;
+const DUEL_START_DELAY_MS = 1500;
+const DUEL_TARGET_SCORE = 12;
+const DUEL_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+const DUEL_CODE_LEN = 6;
+const DUEL_SNAPSHOT_VERSION = 1;
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
+let selectedMode = "single";
 let images = {
   head: null,
   bodyFrames: [],
@@ -113,6 +131,26 @@ let swipeLastX = 0;
 let swipeLastY = 0;
 const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
+let supabaseRealtimeClient = null;
+let supabaseRealtimeClientPromise = null;
+let duelPlayerId = createEditToken();
+let duelPendingStartTimer = null;
+let duelLastBroadcastTs = 0;
+let duel = {
+  roomCode: "",
+  connected: false,
+  channel: null,
+  hostId: "",
+  players: [],
+  localReady: false,
+  remoteReady: false,
+  activeRound: false,
+  sharedSeed: 0,
+  localStartAt: 0,
+  resultLocked: false,
+  resultText: "",
+  remoteState: null,
+};
 
 const bgMusic = new Audio("./assets/bg-music.mp3");
 bgMusic.loop = true;
@@ -234,6 +272,92 @@ function updateAudioButton() {
   audioToggle.setAttribute("title", audioMuted ? "Audio Off" : "Audio On");
   audioToggle.setAttribute("aria-pressed", String(!audioMuted));
   audioToggle.classList.toggle("muted", audioMuted);
+}
+
+function isDuelSelected() {
+  return selectedMode === "duel";
+}
+
+function isDuelRoundActive() {
+  return duel.activeRound;
+}
+
+function updateOpponentScore(nextScore = 0) {
+  if (!opponentScoreEl || !opponentScoreboardEl) return;
+  opponentScoreEl.textContent = String(Math.max(0, Math.floor(Number(nextScore) || 0)));
+  opponentScoreboardEl.hidden = !isDuelRoundActive();
+}
+
+function setDuelStatus(message) {
+  if (duelStatusEl) duelStatusEl.textContent = message;
+}
+
+function normalizeDuelRoomCode(raw) {
+  const safe = String(raw || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "")
+    .slice(0, 12);
+  return safe;
+}
+
+function createRoomCode(length = DUEL_CODE_LEN) {
+  let code = "";
+  for (let i = 0; i < length; i += 1) {
+    code += DUEL_CODE_CHARS[Math.floor(Math.random() * DUEL_CODE_CHARS.length)];
+  }
+  return code;
+}
+
+function isDuelReadyToStart() {
+  return duel.connected && duel.players.length === 2;
+}
+
+function updateModeButtons() {
+  if (modeSingleButton) modeSingleButton.classList.toggle("active", selectedMode === "single");
+  if (modeDuelButton) modeDuelButton.classList.toggle("active", selectedMode === "duel");
+  if (duelPanel) duelPanel.hidden = selectedMode !== "duel";
+  if (nameEntry && selectedMode === "duel") nameEntry.hidden = true;
+  const canStartSingle = selectedMode === "single";
+  startGameButton.disabled = selectedMode === "duel" && !isDuelReadyToStart();
+  if (selectedMode === "single") {
+    top5Title.textContent = "Top 5 Global";
+    if (menuHighscoreList?.parentElement) menuHighscoreList.parentElement.hidden = false;
+  } else {
+    startGameButton.textContent = isDuelReadyToStart() ? "Start 1v1" : "Waiting for Opponent";
+    top5Title.textContent = "Top 5 Global";
+    if (menuHighscoreList?.parentElement) menuHighscoreList.parentElement.hidden = true;
+  }
+  if (!canStartSingle) {
+    pendingHighscore = null;
+    pendingHighscoreName = "";
+    hidePendingNameEntry();
+  }
+}
+
+function applySelectedMode(mode) {
+  const next = mode === "duel" ? "duel" : "single";
+  if (selectedMode === next) {
+    updateModeButtons();
+    return;
+  }
+  selectedMode = next;
+  if (selectedMode === "single") {
+    stopDuelSession({ keepMode: true });
+  }
+  updateModeButtons();
+}
+
+function sortedPlayerIds() {
+  return [...duel.players].sort();
+}
+
+function recomputeDuelHost() {
+  const ids = sortedPlayerIds();
+  duel.hostId = ids[0] || "";
+}
+
+function isDuelHost() {
+  return duel.connected && duel.hostId === duelPlayerId;
 }
 
 function normalizeName(rawName) {
@@ -556,6 +680,299 @@ function supabaseHeaders(extra = {}) {
     Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     ...extra,
   };
+}
+
+async function ensureSupabaseRealtimeClient() {
+  if (supabaseRealtimeClient) return supabaseRealtimeClient;
+  if (!supabaseRealtimeClientPromise) {
+    supabaseRealtimeClientPromise = import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm")
+      .then(({ createClient }) => createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false },
+        realtime: { params: { eventsPerSecond: 12 } },
+      }))
+      .then((client) => {
+        supabaseRealtimeClient = client;
+        return client;
+      });
+  }
+  return supabaseRealtimeClientPromise;
+}
+
+function duelChannelName(roomCode) {
+  return `lulu-duel-${normalizeDuelRoomCode(roomCode).toLowerCase()}`;
+}
+
+function updateDuelPresencePlayers(channel) {
+  const presence = channel?.presenceState?.() || {};
+  duel.players = Object.keys(presence);
+  recomputeDuelHost();
+  if (duel.connected && duel.players.length <= 1 && !duel.activeRound) {
+    setDuelStatus(`Room ${duel.roomCode}: waiting for opponent...`);
+  } else if (duel.connected && duel.players.length >= 2 && !duel.activeRound) {
+    if (isDuelHost()) {
+      setDuelStatus(`Room ${duel.roomCode}: opponent joined. Press Start 1v1.`);
+    } else {
+      setDuelStatus(`Room ${duel.roomCode}: waiting for host to start.`);
+    }
+  }
+  if (duel.players.length > 2 && !duel.activeRound) {
+    setDuelStatus(`Room ${duel.roomCode} is full. Use another code.`);
+  }
+  updateModeButtons();
+}
+
+function sanitizeSnakePayload(rawSnake) {
+  if (!Array.isArray(rawSnake)) return null;
+  const out = [];
+  for (const segment of rawSnake.slice(0, CELL_COUNT * CELL_COUNT)) {
+    const x = Number(segment?.x);
+    const y = Number(segment?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    out.push({ x: ((Math.floor(x) % CELL_COUNT) + CELL_COUNT) % CELL_COUNT, y: ((Math.floor(y) % CELL_COUNT) + CELL_COUNT) % CELL_COUNT });
+  }
+  return out.length > 0 ? out : null;
+}
+
+function handleDuelSnapshot(payload) {
+  if (!payload || payload.playerId === duelPlayerId) return;
+  if (Number(payload.v || 0) !== DUEL_SNAPSHOT_VERSION) return;
+  const snake = sanitizeSnakePayload(payload.snake);
+  if (!snake) return;
+  const score = normalizeScore(payload.score);
+  const dir = payload.dir && Number.isFinite(payload.dir.x) && Number.isFinite(payload.dir.y)
+    ? { x: Math.sign(payload.dir.x), y: Math.sign(payload.dir.y) }
+    : { x: 1, y: 0 };
+  duel.remoteState = {
+    playerId: String(payload.playerId),
+    snake,
+    dir,
+    score,
+    alive: !!payload.alive,
+    ts: Date.now(),
+  };
+  updateOpponentScore(score);
+}
+
+function clearDuelRuntimeState() {
+  clearTimeout(duelPendingStartTimer);
+  duelPendingStartTimer = null;
+  duel.localReady = false;
+  duel.remoteReady = false;
+  duel.activeRound = false;
+  duel.resultLocked = false;
+  duel.resultText = "";
+  duel.remoteState = null;
+  duelLastBroadcastTs = 0;
+  updateOpponentScore(0);
+}
+
+function sendDuelBroadcast(event, payload = {}) {
+  if (!duel.channel || !duel.connected) return;
+  void duel.channel.send({
+    type: "broadcast",
+    event,
+    payload: {
+      ...payload,
+      playerId: duelPlayerId,
+      room: duel.roomCode,
+      sentAt: Date.now(),
+    },
+  });
+}
+
+function maybeBroadcastDuelSnapshot(force = false) {
+  if (!isDuelRoundActive() || !duel.connected || !duel.channel) return;
+  const now = performance.now();
+  if (!force && now - duelLastBroadcastTs < DUEL_SYNC_INTERVAL_MS) return;
+  duelLastBroadcastTs = now;
+  sendDuelBroadcast("duel-state", {
+    v: DUEL_SNAPSHOT_VERSION,
+    score: state.score,
+    alive: state.alive,
+    dir: { x: state.dir.x, y: state.dir.y },
+    snake: state.snake.map((segment) => ({ x: segment.x, y: segment.y })),
+  });
+}
+
+function beginDuelRound({ seed, startAt = Date.now() }) {
+  if (!duel.connected) return;
+  clearTimeout(duelPendingStartTimer);
+  duelPendingStartTimer = null;
+  duel.sharedSeed = seed >>> 0;
+  duel.localStartAt = Number(startAt) || Date.now();
+  duel.activeRound = true;
+  duel.resultLocked = false;
+  duel.resultText = "";
+  duel.remoteState = null;
+  updateOpponentScore(0);
+  pendingHighscore = null;
+  pendingHighscoreName = "";
+  hidePendingNameEntry();
+  resetGame({ seed: duel.sharedSeed, duelMode: true });
+  maybeBroadcastDuelSnapshot(true);
+  setDuelStatus(`Room ${duel.roomCode}: live`);
+}
+
+function scheduleDuelRoundStart(payload) {
+  if (!duel.connected) return;
+  const seed = Number(payload?.seed || Date.now()) >>> 0;
+  const startAt = Math.max(Date.now() + 120, Number(payload?.startAt || Date.now() + DUEL_START_DELAY_MS));
+  duel.sharedSeed = seed;
+  duel.localStartAt = startAt;
+  clearTimeout(duelPendingStartTimer);
+  const delay = Math.max(0, startAt - Date.now());
+  setDuelStatus(`Room ${duel.roomCode}: starting in ${(delay / 1000).toFixed(1)}s`);
+  duelPendingStartTimer = setTimeout(() => {
+    beginDuelRound({ seed, startAt });
+  }, delay);
+}
+
+function finishDuelRound(message, localResult) {
+  if (!isDuelRoundActive() || duel.resultLocked) return;
+  duel.resultLocked = true;
+  duel.resultText = message;
+  duel.activeRound = false;
+  updateOpponentScore(duel.remoteState?.score || 0);
+  gameStarted = false;
+  paused = true;
+  clearActiveChaser();
+  hideChaserAlert();
+  if (localResult) {
+    sendDuelBroadcast("duel-result", {
+      result: localResult,
+      score: state.score,
+      alive: state.alive,
+    });
+  }
+  openMenu("duel-over");
+}
+
+async function leaveDuelChannel() {
+  if (!duel.channel) return;
+  try {
+    await duel.channel.untrack();
+  } catch {
+    // Ignore cleanup errors.
+  }
+  try {
+    await duel.channel.unsubscribe();
+  } catch {
+    // Ignore cleanup errors.
+  }
+  duel.channel = null;
+}
+
+function stopDuelSession(options = {}) {
+  const { keepMode = false } = options;
+  clearDuelRuntimeState();
+  void leaveDuelChannel();
+  duel.connected = false;
+  duel.roomCode = "";
+  duel.players = [];
+  duel.hostId = "";
+  localStorage.removeItem(DUEL_ROOM_CODE_KEY);
+  if (!keepMode) selectedMode = "single";
+  updateModeButtons();
+}
+
+async function joinDuelRoom(rawCode) {
+  const code = normalizeDuelRoomCode(rawCode);
+  if (code.length < 4) {
+    setDuelStatus("Enter a room code with at least 4 letters/numbers.");
+    return;
+  }
+  if (duelCreateButton) duelCreateButton.disabled = true;
+  if (duelJoinButton) duelJoinButton.disabled = true;
+  setDuelStatus(`Connecting to ${code}...`);
+  clearDuelRuntimeState();
+  await leaveDuelChannel();
+
+  try {
+    const client = await ensureSupabaseRealtimeClient();
+    const channel = client.channel(duelChannelName(code), {
+      config: {
+        broadcast: { self: false },
+        presence: { key: duelPlayerId },
+      },
+    });
+
+    channel
+      .on("presence", { event: "sync" }, () => {
+        updateDuelPresencePlayers(channel);
+      })
+      .on("broadcast", { event: "duel-hello" }, ({ payload }) => {
+        if (!payload || payload.playerId === duelPlayerId) return;
+        if (!duel.activeRound) {
+          setDuelStatus(`Room ${duel.roomCode}: opponent joined.`);
+          updateModeButtons();
+        }
+      })
+      .on("broadcast", { event: "duel-start" }, ({ payload }) => {
+        scheduleDuelRoundStart(payload);
+      })
+      .on("broadcast", { event: "duel-state" }, ({ payload }) => {
+        handleDuelSnapshot(payload);
+      })
+      .on("broadcast", { event: "duel-result" }, ({ payload }) => {
+        if (!payload || payload.playerId === duelPlayerId || !isDuelRoundActive()) return;
+        const remoteResult = String(payload.result || "");
+        if (remoteResult === "lose-crash") {
+          finishDuelRound("Askaban-friendly win. Opponent crashed.", null);
+          return;
+        }
+        if (remoteResult === "win-target") {
+          finishDuelRound("You lost the race. Opponent reached 12 treats.", null);
+        }
+      });
+
+    const subscribeStatus = await new Promise((resolve) => {
+      channel.subscribe((status) => resolve(status));
+    });
+
+    if (subscribeStatus !== "SUBSCRIBED") {
+      throw new Error(`Realtime subscribe failed: ${subscribeStatus}`);
+    }
+
+    duel.channel = channel;
+    duel.connected = true;
+    duel.roomCode = code;
+    localStorage.setItem(DUEL_ROOM_CODE_KEY, code);
+    await channel.track({ joinedAt: Date.now(), name: getStoredName() });
+    updateDuelPresencePlayers(channel);
+    sendDuelBroadcast("duel-hello", { name: getStoredName() });
+    setDuelStatus(`Room ${duel.roomCode}: waiting for opponent...`);
+    updateModeButtons();
+  } catch (error) {
+    console.error("Unable to connect duel room.", error);
+    stopDuelSession({ keepMode: true });
+    setDuelStatus("Realtime unavailable. Check network and try again.");
+  } finally {
+    if (duelCreateButton) duelCreateButton.disabled = false;
+    if (duelJoinButton) duelJoinButton.disabled = false;
+  }
+}
+
+async function createDuelRoom() {
+  const candidate = createRoomCode();
+  if (duelRoomInput) duelRoomInput.value = candidate;
+  await joinDuelRoom(candidate);
+}
+
+function startDuelRoundAsHost() {
+  if (!duel.connected || !isDuelReadyToStart()) {
+    setDuelStatus("Waiting for opponent...");
+    return;
+  }
+  if (!isDuelHost()) {
+    setDuelStatus("Waiting for host to start.");
+    return;
+  }
+  const payload = {
+    seed: Date.now(),
+    startAt: Date.now() + DUEL_START_DELAY_MS,
+  };
+  sendDuelBroadcast("duel-start", payload);
+  scheduleDuelRoundStart(payload);
 }
 
 function normalizeRemoteRow(row) {
@@ -1145,6 +1562,48 @@ function drawGrid() {
     ctx.fillRect(cell.x * size + 1, cell.y * size + 1, size - 2, size - 2);
   };
 
+  const drawRemoteSnake = () => {
+    if (!isDuelRoundActive() || !duel.remoteState) return;
+    if (Date.now() - duel.remoteState.ts > DUEL_MAX_STALE_MS) {
+      duel.remoteState = null;
+      updateOpponentScore(0);
+      return;
+    }
+    const remoteSnake = duel.remoteState.snake;
+    if (!Array.isArray(remoteSnake) || remoteSnake.length === 0) return;
+    const base = "#2f2a23";
+    const glow = "#f4e6c8";
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    for (let i = remoteSnake.length - 1; i >= 0; i -= 1) {
+      const seg = remoteSnake[i];
+      const cx = seg.x * size + size / 2;
+      const cy = seg.y * size + size / 2;
+      const w = size * (i === 0 ? 1.08 : 0.94);
+      const h = size * (i === 0 ? 1.08 : 0.84);
+      const r = Math.min(w, h) * 0.35;
+      ctx.beginPath();
+      ctx.moveTo(cx - w / 2 + r, cy - h / 2);
+      ctx.lineTo(cx + w / 2 - r, cy - h / 2);
+      ctx.quadraticCurveTo(cx + w / 2, cy - h / 2, cx + w / 2, cy - h / 2 + r);
+      ctx.lineTo(cx + w / 2, cy + h / 2 - r);
+      ctx.quadraticCurveTo(cx + w / 2, cy + h / 2, cx + w / 2 - r, cy + h / 2);
+      ctx.lineTo(cx - w / 2 + r, cy + h / 2);
+      ctx.quadraticCurveTo(cx - w / 2, cy + h / 2, cx - w / 2, cy + h / 2 - r);
+      ctx.lineTo(cx - w / 2, cy - h / 2 + r);
+      ctx.quadraticCurveTo(cx - w / 2, cy - h / 2, cx - w / 2 + r, cy - h / 2);
+      ctx.closePath();
+      ctx.fillStyle = i === 0 ? "#3c3329" : base;
+      ctx.fill();
+      if (i === 0) {
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = Math.max(1.5, size * 0.07);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  };
+
   const drawPeeTreatAt = (cell, boosted = false) => {
     const cx = cell.x * size + size / 2;
     const cy = cell.y * size + size / 2;
@@ -1377,6 +1836,8 @@ function drawGrid() {
     ctx.restore();
   }
 
+  drawRemoteSnake();
+
   if (activeChaser) {
     const chaserSize = size * 1.44;
     const dir = activeChaser.dir && (activeChaser.dir.dx !== 0 || activeChaser.dir.dy !== 0)
@@ -1424,6 +1885,33 @@ function advanceBodyWalkFrame() {
 }
 
 function tick() {
+  if (isDuelRoundActive()) {
+    if (paused || !state.alive || !gameStarted) {
+      drawGrid();
+      return;
+    }
+    const wasAlive = state.alive;
+    state = stepGame(state);
+    advanceBodyWalkFrame();
+    updateScore();
+    maybeBroadcastDuelSnapshot();
+
+    if (state.score >= DUEL_TARGET_SCORE) {
+      maybeBroadcastDuelSnapshot(true);
+      finishDuelRound("You won the 1v1 race.", "win-target");
+      drawGrid();
+      return;
+    }
+    if (wasAlive && !state.alive) {
+      maybeBroadcastDuelSnapshot(true);
+      finishDuelRound("You crashed. Opponent wins this round.", "lose-crash");
+      drawGrid();
+      return;
+    }
+    drawGrid();
+    return;
+  }
+
   updateRageState();
   if (paused || !state.alive || !gameStarted) {
     drawGrid();
@@ -1523,11 +2011,15 @@ function fitCanvasToViewport() {
   }
 }
 
-function resetGame() {
+function resetGame(options = {}) {
+  const {
+    seed = Date.now(),
+    duelMode = false,
+  } = options;
   unlockAudioIfNeeded();
   state = createGameState({
     gridSize: CELL_COUNT,
-    seed: Date.now(),
+    seed,
     wallsEnabled: false,
   });
   state = { ...state, pointsPerFood: 1 };
@@ -1549,6 +2041,7 @@ function resetGame() {
   if (rageFadeRaf) cancelAnimationFrame(rageFadeRaf);
   rageFadeRaf = null;
   ragePopup.hidden = true;
+  rageIndicator.hidden = true;
   document.body.classList.remove("rage-mode");
   lastFoodKey = null;
   bodyFrameIndex = 0;
@@ -1556,14 +2049,20 @@ function resetGame() {
   gameStarted = true;
   pauseButton.textContent = "Pause";
   updateScore();
-  assignFoodStyle();
+  if (!duelMode) {
+    assignFoodStyle();
+  }
   overlay.hidden = true;
+  if (!duelMode) {
+    updateOpponentScore(0);
+  }
   drawGrid();
 }
 
 function updateMenuLabels() {
   top5Title.textContent = "Top 5 Global";
   renderHighscores();
+  updateModeButtons();
 }
 
 function getStoredName() {
@@ -1734,6 +2233,13 @@ function recordHighscore(score, rawName) {
 }
 
 function handleGameOver(score) {
+  if (isDuelSelected()) {
+    pendingHighscore = null;
+    pendingHighscoreName = "";
+    hidePendingNameEntry();
+    renderHighscores();
+    return;
+  }
   if (isTopFiveScore(score)) {
     pendingHighscore = recordHighscore(score, getStoredName());
     showPendingNameEntry();
@@ -1754,10 +2260,31 @@ function initHighscores() {
 function openMenu(mode) {
   gameStarted = false;
   paused = true;
+  clearTimeout(duelPendingStartTimer);
+  duelPendingStartTimer = null;
   clearActiveChaser();
   hideChaserAlert();
   pauseButton.textContent = "Pause";
   overlay.hidden = false;
+
+  if (selectedMode === "duel" || mode === "duel-over") {
+    hidePendingNameEntry();
+    pendingHighscore = null;
+    pendingHighscoreName = "";
+    menuTitle.textContent = "Lulu-Snake 1v1";
+    if (mode === "duel-over") {
+      menuText.textContent = duel.resultText || "Round finished.";
+    } else if (duel.connected) {
+      menuText.textContent = isDuelReadyToStart()
+        ? "Room ready. Press Start 1v1."
+        : "Create or join a room, then wait for your opponent.";
+    } else {
+      menuText.textContent = "Create or join a room to play realtime 1v1.";
+    }
+    updateModeButtons();
+    return;
+  }
+
   renderHighscores();
   if (!(mode === "gameover" && pendingHighscore)) {
     void refreshHighscoresFromServer();
@@ -1787,10 +2314,12 @@ function openMenu(mode) {
     menuText.textContent = "Press Start to begin.";
     startGameButton.textContent = "Start Game";
   }
+  updateModeButtons();
 }
 
 function handleDirection(direction) {
   state = setDirection(state, direction);
+  if (isDuelRoundActive()) maybeBroadcastDuelSnapshot(true);
 }
 
 function isSwipeInputTarget(target) {
@@ -1846,6 +2375,10 @@ function handleKey(event) {
   }
 
   if (key === "r") {
+    if (isDuelRoundActive()) {
+      finishDuelRound("Round stopped. Opponent wins.", "lose-crash");
+      return;
+    }
     openMenu("start");
   }
 }
@@ -1857,10 +2390,18 @@ pauseButton.addEventListener("click", () => {
 });
 
 restartButton.addEventListener("click", () => {
+  if (isDuelRoundActive()) {
+    finishDuelRound("Round stopped. Opponent wins.", "lose-crash");
+    return;
+  }
   openMenu("start");
 });
 
 startGameButton.addEventListener("click", () => {
+  if (isDuelSelected()) {
+    startDuelRoundAsHost();
+    return;
+  }
   if (pendingHighscore?.id) {
     submitPendingHighscoreName();
   }
@@ -1877,6 +2418,47 @@ nameEntryInput.addEventListener("keydown", (event) => {
     submitPendingHighscoreName();
   }
 });
+
+if (modeSingleButton) {
+  modeSingleButton.addEventListener("click", () => {
+    applySelectedMode("single");
+    openMenu("start");
+  });
+}
+
+if (modeDuelButton) {
+  modeDuelButton.addEventListener("click", () => {
+    applySelectedMode("duel");
+    openMenu("start");
+  });
+}
+
+if (duelRoomInput) {
+  const storedCode = normalizeDuelRoomCode(localStorage.getItem(DUEL_ROOM_CODE_KEY) || "");
+  if (storedCode) duelRoomInput.value = storedCode;
+  duelRoomInput.addEventListener("input", () => {
+    duelRoomInput.value = normalizeDuelRoomCode(duelRoomInput.value);
+  });
+  duelRoomInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void joinDuelRoom(duelRoomInput.value);
+    }
+  });
+}
+
+if (duelCreateButton) {
+  duelCreateButton.addEventListener("click", () => {
+    void createDuelRoom();
+  });
+}
+
+if (duelJoinButton) {
+  duelJoinButton.addEventListener("click", () => {
+    const code = duelRoomInput ? duelRoomInput.value : "";
+    void joinDuelRoom(code);
+  });
+}
 
 document.addEventListener("pointerdown", (event) => {
   if (event.pointerType === "mouse") return;
@@ -1924,6 +2506,9 @@ if (window.visualViewport) {
   window.visualViewport.addEventListener("resize", fitCanvasToViewport);
   window.visualViewport.addEventListener("scroll", fitCanvasToViewport);
 }
+window.addEventListener("beforeunload", () => {
+  void leaveDuelChannel();
+});
 
 function assignFoodStyle() {
   if (images.treats.length > 0) {

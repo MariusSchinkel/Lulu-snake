@@ -21,6 +21,7 @@ Then open:
 - `Space`: pause/resume
 - `R`: restart
 - `Speaker` button toggles music (`🔊` on, `🔇` muted)
+- Menu mode switch: `Single Player` or `1v1 Online`
 
 ## Gameplay Notes
 
@@ -52,6 +53,24 @@ Then open:
 - Optional dedicated hunter asset: `assets/chaser-askaban.png`.
 - Chase music now uses `assets/askaban-song.mp3` during active Askaban events.
 - The `OH NO WINDHUND LADY LOST CONTROL` alert now stays longer on screen and uses a stronger pop/pulse animation for higher visibility.
+- New `1v1 Online` mode uses Supabase Realtime room codes for live head-to-head races.
+- In 1v1 mode, first player to `12` treats wins.
+- During 1v1 mode, opponent movement is rendered as a live ghost snake and an opponent score counter.
+- Rage/Askaban/highscore submission are intentionally disabled during active 1v1 rounds to keep the duel deterministic.
+
+## 1v1 Online (Supabase Realtime)
+
+1. Open menu and switch to `1v1 Online`.
+2. Create a room (`Create`) or enter a code and press `Join`.
+3. Share the room code with the second player.
+4. When both players are connected, the host presses `Start 1v1`.
+5. First to `12` treats wins.
+
+Notes:
+
+- Requires internet access (Supabase Realtime).
+- Uses your existing Supabase project URL + anon key from `app.js`; no extra table is required for room sync.
+- Room sync is optimized for 2 players (`1v1`).
 
 ### Body Animation Assets
 

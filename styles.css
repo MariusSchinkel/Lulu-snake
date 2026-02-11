@@ -249,6 +249,17 @@ body.rage-mode::after {
   font-size: 28px;
 }
 
+.opponent-scoreboard {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(85, 58, 24, 0.34);
+  background: rgba(250, 238, 214, 0.9);
+}
+
+.opponent-scoreboard strong {
+  color: #4f2e0f;
+}
+
 .stage {
   position: relative;
   display: flex;
@@ -587,6 +598,61 @@ body.rage-mode .game-title span {
   color: #5d3a15;
 }
 
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.mode-btn {
+  min-width: 0;
+}
+
+.mode-btn.active {
+  background: #8f642a;
+  border-color: #7b531f;
+  box-shadow: inset 0 1px 0 rgba(255, 245, 212, 0.4);
+}
+
+.duel-panel {
+  display: grid;
+  gap: 8px;
+  text-align: left;
+  border: 1px solid rgba(133, 95, 42, 0.45);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(255, 246, 227, 0.75);
+}
+
+.duel-help {
+  font-size: 13px;
+  color: #6a4b25;
+}
+
+.duel-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+}
+
+.duel-row input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #9f712a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  background: #fffdf7;
+  color: #3b2a16;
+  text-transform: uppercase;
+}
+
+.duel-status {
+  min-height: 18px;
+  font-size: 13px;
+  color: #5c3e1d;
+}
+
 .menu-highscore-list li.top5-new {
   background: linear-gradient(90deg, rgba(255, 218, 122, 0.55), rgba(255, 244, 201, 0.3));
   border-radius: 8px;
@@ -660,6 +726,11 @@ button {
   user-select: none;
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 button:active {
   transform: translateY(1px);
 }
@@ -691,10 +762,10 @@ button:active {
 
   .topbar {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: 1fr auto auto;
     grid-template-areas:
-      "title score"
-      "rage audio";
+      "title score opponent"
+      "rage audio audio";
     gap: 8px 10px;
     align-items: center;
   }
@@ -723,6 +794,10 @@ button:active {
   .scoreboard {
     grid-area: score;
     text-align: right;
+  }
+
+  .opponent-scoreboard {
+    grid-area: opponent;
   }
 
   .scoreboard strong {
@@ -794,6 +869,25 @@ button:active {
   .actions button {
     width: 100%;
     min-width: 0;
+  }
+
+  .duel-row {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "input input"
+      "create join";
+  }
+
+  .duel-row input {
+    grid-area: input;
+  }
+
+  #duel-create {
+    grid-area: create;
+  }
+
+  #duel-join {
+    grid-area: join;
   }
 
 }
