@@ -95,123 +95,66 @@ Notes:
 
 ## Highscores (Cross-Device)
 
-- Top 5 scores are synced via Supabase (`public.lulu_scores`).
-- Score submissions are capped at `20000`.
+- Top 5 scores are synced via Supabase (`public.lulu_scores`) and read publicly.
+- Score submissions are capped at `20000` and now go through a secured Edge Function (`submit-score`).
 - The game keeps a local cache as fallback if network requests fail.
 - Name defaults to `Player 1` if empty.
 - When you reach Top 5, you edit your name inline in the highlighted score row and get two actions: `Save Score` and `Save Score & Play Again`.
 
 ## Supabase Setup
 
-Create table/functions/policies in Supabase SQL Editor:
+1. In Supabase SQL editor, run:
 
 ```sql
-create extension if not exists pgcrypto;
-
-create table if not exists public.lulu_scores (
-  id uuid primary key default gen_random_uuid(),
-  name text not null check (char_length(name) between 1 and 24),
-  score integer not null check (score >= 0 and score <= 20000),
-  edit_token_hash text,
-  created_at timestamptz not null default now()
-);
-
-alter table public.lulu_scores
-  add column if not exists edit_token_hash text;
-
-update public.lulu_scores
-set edit_token_hash = encode(extensions.digest(gen_random_uuid()::text, 'sha256'), 'hex')
-where edit_token_hash is null;
-
-alter table public.lulu_scores
-  alter column edit_token_hash set not null;
-
-alter table public.lulu_scores
-  drop constraint if exists lulu_scores_score_check;
-
-alter table public.lulu_scores
-  add constraint lulu_scores_score_check check (score >= 0 and score <= 20000);
-
-create index if not exists lulu_scores_rank_idx
-on public.lulu_scores (score desc, created_at asc);
-
-alter table public.lulu_scores enable row level security;
-
-revoke insert, update, delete on table public.lulu_scores from anon;
-grant select on table public.lulu_scores to anon;
-
-drop policy if exists "Public can read scores" on public.lulu_scores;
-create policy "Public can read scores"
-on public.lulu_scores for select to anon using (true);
-
-drop policy if exists "Public can insert scores" on public.lulu_scores;
-drop policy if exists "Public can update score names" on public.lulu_scores;
-
-drop function if exists public.create_highscore(text, integer, text);
-create or replace function public.create_highscore(
-  p_name text,
-  p_score integer,
-  p_edit_token text
-)
-returns setof public.lulu_scores
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
-declare
-  v_name text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 24);
-  v_score integer := greatest(0, least(coalesce(p_score, 0), 20000));
-  v_token text := coalesce(p_edit_token, '');
-  v_hash text;
-begin
-  if char_length(v_name) = 0 then
-    v_name := 'Player 1';
-  end if;
-  if v_token !~ '^[0-9a-f]{48}$' then
-    raise exception 'invalid edit token';
-  end if;
-  v_hash := encode(extensions.digest(v_token, 'sha256'), 'hex');
-
-  return query
-  insert into public.lulu_scores (name, score, edit_token_hash)
-  values (v_name, v_score, v_hash)
-  returning *;
-end;
-$$;
-
-drop function if exists public.rename_highscore(uuid, text, text);
-create or replace function public.rename_highscore(
-  p_id uuid,
-  p_name text,
-  p_edit_token text
-)
-returns setof public.lulu_scores
-language plpgsql
-security definer
-set search_path = public, extensions
-as $$
-declare
-  v_name text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 24);
-  v_hash text := encode(extensions.digest(coalesce(p_edit_token, ''), 'sha256'), 'hex');
-begin
-  if char_length(v_name) = 0 then
-    v_name := 'Player 1';
-  end if;
-
-  return query
-  update public.lulu_scores
-  set name = v_name
-  where id = p_id
-    and edit_token_hash = v_hash
-  returning *;
-end;
-$$;
-
-revoke all on function public.create_highscore(text, integer, text) from public;
-revoke all on function public.rename_highscore(uuid, text, text) from public;
-grant execute on function public.create_highscore(text, integer, text) to anon;
-grant execute on function public.rename_highscore(uuid, text, text) to anon;
+-- Paste and run the complete script from:
+-- supabase/sql/highscore-security.sql
 ```
+
+This script:
+
+- Enforces `score <= 20000`.
+- Creates/updates `highscore_audit`.
+- Creates secure RPCs:
+  - `create_highscore_secure(...)`
+  - `rename_highscore_secure(...)`
+- Revokes browser/anon execute on legacy RPCs.
+- Grants execute on secure RPCs to `service_role` only.
+
+2. Set Edge Function secrets (replace values):
+
+```bash
+supabase secrets set \
+  SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co" \
+  SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVICE_ROLE_KEY" \
+  TURNSTILE_SECRET_KEY="YOUR_TURNSTILE_SECRET_KEY" \
+  ALLOWED_ORIGINS="https://lulu-snake.de,https://www.lulu-snake.de,http://localhost:8000"
+```
+
+3. Deploy the function:
+
+```bash
+supabase functions deploy submit-score
+```
+
+4. In `app.js`, set:
+
+```js
+const TURNSTILE_SITE_KEY = "YOUR_TURNSTILE_SITE_KEY";
+```
+
+5. Ensure Cloudflare Turnstile allows your domains (`lulu-snake.de`, `www.lulu-snake.de`, `localhost` for dev).
+
+### Edge Function Files
+
+- `supabase/functions/submit-score/index.ts`
+- `supabase/sql/highscore-security.sql`
+
+The browser now writes highscores only through `POST /functions/v1/submit-score` with:
+
+- origin allowlist check,
+- Turnstile verification,
+- service-role RPC call,
+- audit logging of accepted/rejected attempts.
 
 ### Security Cleanup (If You Already Saw Fake Scores)
 
@@ -223,8 +166,17 @@ where score > 20000
    or name ilike '%hacked%';
 ```
 
-Client config is set in `app.js`. The client now writes via RPC (`create_highscore`, `rename_highscore`) instead of direct table insert/update.
-Legacy direct table-write fallback has been removed (fail-closed). If RPC migration is missing or misconfigured, score writes are rejected until the SQL setup above is correctly applied.
+To inspect attacks and blocks:
+
+```sql
+select created_at, ip, user_agent, origin, name, score, accepted, reason
+from public.highscore_audit
+order by created_at desc
+limit 200;
+```
+
+Client config is set in `app.js`.
+Legacy direct table-write fallback remains removed (fail-closed).
 
 ## Deploy (GitHub Pages)
 

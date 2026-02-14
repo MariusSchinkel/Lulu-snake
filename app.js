@@ -42,8 +42,9 @@ const SUPABASE_URL = "https://tctrtklwqmynkfssipgc.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRjdHJ0a2x3cW15bmtmc3NpcGdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0NjU0MTAsImV4cCI6MjA4NjA0MTQxMH0.Hi640Ia4HN4Unjvay5hZ91yTrZUB9DVRLXushyMuh_w";
 const SUPABASE_TABLE = "lulu_scores";
-const SUPABASE_CREATE_SCORE_RPC = "create_highscore";
-const SUPABASE_RENAME_SCORE_RPC = "rename_highscore";
+const SUPABASE_SCORE_GATEWAY_FUNCTION = "submit-score";
+const TURNSTILE_SITE_KEY = "0x4AAAAAACcl18ZU5k1Cjvaj";
+const TURNSTILE_WAIT_MS = 8000;
 const MAX_PLAYER_NAME_LENGTH = 24;
 const MAX_SUBMIT_SCORE = 20000;
 const HIGHSCORE_EDIT_TOKEN_KEY_PREFIX = "lulu-snake-edit-token-";
@@ -104,6 +105,12 @@ let gameStarted = false;
 let pendingHighscore = null;
 let pendingHighscoreName = "";
 let highscores = [];
+let turnstileWidgetId = null;
+let turnstileContainer = null;
+let turnstileRequestResolver = null;
+let turnstileRequestRejector = null;
+let turnstileRequestTimer = null;
+let turnstileInFlightPromise = null;
 let rageTreatActive = false;
 let rageTreatReady = false;
 let rageRunner = null;
@@ -700,6 +707,105 @@ function supabaseHeaders(extra = {}) {
     Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
     ...extra,
   };
+}
+
+function isTurnstileConfigured() {
+  return Boolean(
+    TURNSTILE_SITE_KEY
+    && TURNSTILE_SITE_KEY !== "REPLACE_WITH_TURNSTILE_SITE_KEY"
+    && TURNSTILE_SITE_KEY !== "YOUR_TURNSTILE_SITE_KEY"
+  );
+}
+
+function waitForTurnstileApi() {
+  return new Promise((resolve, reject) => {
+    const start = performance.now();
+
+    function poll() {
+      if (window.turnstile?.render && window.turnstile?.execute) {
+        resolve(window.turnstile);
+        return;
+      }
+      if (performance.now() - start > TURNSTILE_WAIT_MS) {
+        reject(new Error("Turnstile API unavailable"));
+        return;
+      }
+      setTimeout(poll, 60);
+    }
+
+    poll();
+  });
+}
+
+function cleanupTurnstilePending() {
+  if (turnstileRequestTimer) {
+    clearTimeout(turnstileRequestTimer);
+    turnstileRequestTimer = null;
+  }
+  turnstileRequestResolver = null;
+  turnstileRequestRejector = null;
+}
+
+async function ensureTurnstileWidget() {
+  if (!isTurnstileConfigured()) {
+    throw new Error("Turnstile site key is not configured in app.js");
+  }
+  await waitForTurnstileApi();
+  if (turnstileWidgetId !== null) return turnstileWidgetId;
+
+  turnstileContainer = document.createElement("div");
+  turnstileContainer.style.position = "fixed";
+  turnstileContainer.style.left = "-9999px";
+  turnstileContainer.style.top = "-9999px";
+  turnstileContainer.style.opacity = "0";
+  turnstileContainer.style.pointerEvents = "none";
+  document.body.appendChild(turnstileContainer);
+
+  turnstileWidgetId = window.turnstile.render(turnstileContainer, {
+    sitekey: TURNSTILE_SITE_KEY,
+    size: "invisible",
+    callback: (token) => {
+      const resolve = turnstileRequestResolver;
+      cleanupTurnstilePending();
+      if (resolve) resolve(String(token || ""));
+    },
+    "error-callback": () => {
+      const reject = turnstileRequestRejector;
+      cleanupTurnstilePending();
+      if (reject) reject(new Error("Turnstile verification failed"));
+    },
+    "expired-callback": () => {
+      const reject = turnstileRequestRejector;
+      cleanupTurnstilePending();
+      if (reject) reject(new Error("Turnstile token expired"));
+    },
+  });
+
+  return turnstileWidgetId;
+}
+
+async function requestTurnstileToken(action) {
+  if (turnstileInFlightPromise) return turnstileInFlightPromise;
+  turnstileInFlightPromise = (async () => {
+    const widgetId = await ensureTurnstileWidget();
+    const token = await new Promise((resolve, reject) => {
+      turnstileRequestResolver = resolve;
+      turnstileRequestRejector = reject;
+      turnstileRequestTimer = setTimeout(() => {
+        cleanupTurnstilePending();
+        reject(new Error("Turnstile timeout"));
+      }, TURNSTILE_WAIT_MS);
+      window.turnstile.reset(widgetId);
+      window.turnstile.execute(widgetId, { action });
+    });
+    if (!token) {
+      throw new Error("Turnstile returned empty token");
+    }
+    return token;
+  })().finally(() => {
+    turnstileInFlightPromise = null;
+  });
+  return turnstileInFlightPromise;
 }
 
 async function ensureSupabaseRealtimeClient() {
@@ -1376,20 +1482,18 @@ function createSupabaseHttpError(scope, response, payload) {
   return err;
 }
 
-function isDigestFunctionMissingError(error) {
-  const text = `${error?.message || ""} ${error?.details || ""} ${error?.code || ""}`.toLowerCase();
-  return text.includes("function digest(text, unknown) does not exist")
-    || text.includes("digest(text, unknown)");
-}
-
-async function callSupabaseRpc(rpcName, payload) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${rpcName}`, {
+async function callScoreGateway(action, payload) {
+  const captchaToken = await requestTurnstileToken(action === "rename" ? "score_rename" : "score_create");
+  const response = await fetch(`${SUPABASE_URL}/functions/v1/${SUPABASE_SCORE_GATEWAY_FUNCTION}`, {
     method: "POST",
     headers: supabaseHeaders({
       "Content-Type": "application/json",
-      Prefer: "return=representation",
     }),
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      action,
+      captchaToken,
+      ...payload,
+    }),
   });
   let data = null;
   try {
@@ -1398,9 +1502,8 @@ async function callSupabaseRpc(rpcName, payload) {
     data = null;
   }
   if (!response.ok) {
-    throw createSupabaseHttpError(`RPC ${rpcName} failed`, response, data);
+    throw createSupabaseHttpError("Score gateway failed", response, data);
   }
-  if (Array.isArray(data)) return data[0] || null;
   return data || null;
 }
 
@@ -1409,19 +1512,12 @@ async function insertHighscoreOnServer(name, score, editToken) {
   if (!isValidEditToken(token)) {
     throw new Error("Invalid edit token");
   }
-  try {
-    const raw = await callSupabaseRpc(SUPABASE_CREATE_SCORE_RPC, {
-      p_name: normalizeName(name),
-      p_score: normalizeScore(score),
-      p_edit_token: token,
-    });
-    return raw ? normalizeRemoteRow(raw) : null;
-  } catch (error) {
-    if (isDigestFunctionMissingError(error)) {
-      console.error("Supabase RPC misconfigured: digest() is unavailable in create_highscore. Re-run README Supabase SQL fix.");
-    }
-    throw error;
-  }
+  const raw = await callScoreGateway("create", {
+    name: normalizeName(name),
+    score: normalizeScore(score),
+    editToken: token,
+  });
+  return raw ? normalizeRemoteRow(raw) : null;
 }
 
 async function updateHighscoreNameOnServer(id, name, editToken) {
@@ -1429,19 +1525,12 @@ async function updateHighscoreNameOnServer(id, name, editToken) {
   if (!isValidEditToken(token)) {
     return null;
   }
-  try {
-    const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
-      p_id: String(id),
-      p_name: normalizeName(name),
-      p_edit_token: token,
-    });
-    return raw ? normalizeRemoteRow(raw) : null;
-  } catch (error) {
-    if (isDigestFunctionMissingError(error)) {
-      console.error("Supabase RPC misconfigured: digest() is unavailable in rename_highscore. Re-run README Supabase SQL fix.");
-    }
-    throw error;
-  }
+  const raw = await callScoreGateway("rename", {
+    id: String(id),
+    name: normalizeName(name),
+    editToken: token,
+  });
+  return raw ? normalizeRemoteRow(raw) : null;
 }
 
 async function refreshHighscoresFromServer() {
