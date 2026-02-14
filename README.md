@@ -54,10 +54,13 @@ Then open:
 - Chase music now uses `assets/askaban-song.mp3` during active Askaban events.
 - The `OH NO WINDHUND LADY LOST CONTROL` alert now stays longer on screen and uses a stronger pop/pulse animation for higher visibility.
 - New `1v1 Online` mode uses Supabase Realtime room codes for live head-to-head races.
+- In 1v1 mode, both players fight for the same shared treat (host-authoritative food sync).
 - In 1v1 mode, first player to `20` treats wins.
 - In 1v1 mode, touching the opponent snake causes an immediate loss.
 - In 1v1 mode, players spawn on opposite sides of the board to avoid instant overlap at match start.
 - During 1v1 mode, opponent movement is rendered as a live ghost snake and an opponent score counter.
+- Direction input now blocks instant reverse-through-queue behavior, preventing false early crashes from very fast key/swipe combinations.
+- Realtime duel now accepts authoritative food/start updates from the host only, reducing spoofed-event abuse.
 - Rage/Askaban/highscore submission are intentionally disabled during active 1v1 rounds to keep the duel deterministic.
 
 ## 1v1 Online (Supabase Realtime)
@@ -66,7 +69,7 @@ Then open:
 2. Create a room (`Create`) or enter a code and press `Join`.
 3. Share the room code with the second player.
 4. When both players are connected, the host presses `Start 1v1`.
-5. First to `20` treats wins and touching the opponent snake loses instantly.
+5. Both players race to the same shared treat; first to `20` treats wins, and touching the opponent snake loses instantly.
 
 Notes:
 
@@ -93,6 +96,7 @@ Notes:
 ## Highscores (Cross-Device)
 
 - Top 5 scores are synced via Supabase (`public.lulu_scores`).
+- Score submissions are capped at `20000`.
 - The game keeps a local cache as fallback if network requests fail.
 - Name defaults to `Player 1` if empty.
 - When you reach Top 5, you edit your name inline in the highlighted score row and get two actions: `Save Score` and `Save Score & Play Again`.
@@ -107,7 +111,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.lulu_scores (
   id uuid primary key default gen_random_uuid(),
   name text not null check (char_length(name) between 1 and 24),
-  score integer not null check (score >= 0 and score <= 100000),
+  score integer not null check (score >= 0 and score <= 20000),
   edit_token_hash text,
   created_at timestamptz not null default now()
 );
@@ -121,6 +125,12 @@ where edit_token_hash is null;
 
 alter table public.lulu_scores
   alter column edit_token_hash set not null;
+
+alter table public.lulu_scores
+  drop constraint if exists lulu_scores_score_check;
+
+alter table public.lulu_scores
+  add constraint lulu_scores_score_check check (score >= 0 and score <= 20000);
 
 create index if not exists lulu_scores_rank_idx
 on public.lulu_scores (score desc, created_at asc);
@@ -150,14 +160,14 @@ set search_path = public, extensions
 as $$
 declare
   v_name text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 24);
-  v_score integer := greatest(0, least(coalesce(p_score, 0), 100000));
+  v_score integer := greatest(0, least(coalesce(p_score, 0), 20000));
   v_token text := coalesce(p_edit_token, '');
   v_hash text;
 begin
   if char_length(v_name) = 0 then
     v_name := 'Player 1';
   end if;
-  if char_length(v_token) < 24 then
+  if v_token !~ '^[0-9a-f]{48}$' then
     raise exception 'invalid edit token';
   end if;
   v_hash := encode(extensions.digest(v_token, 'sha256'), 'hex');
@@ -203,8 +213,18 @@ grant execute on function public.create_highscore(text, integer, text) to anon;
 grant execute on function public.rename_highscore(uuid, text, text) to anon;
 ```
 
+### Security Cleanup (If You Already Saw Fake Scores)
+
+Run this once in Supabase SQL editor to remove suspicious rows and keep only sane scores:
+
+```sql
+delete from public.lulu_scores
+where score > 20000
+   or name ilike '%hacked%';
+```
+
 Client config is set in `app.js`. The client now writes via RPC (`create_highscore`, `rename_highscore`) instead of direct table insert/update.
-If RPC migration has not been applied yet, the app can temporarily fall back to legacy direct writes for compatibility, but secure operation requires completing the SQL setup above.
+Legacy direct table-write fallback has been removed (fail-closed). If RPC migration is missing or misconfigured, score writes are rejected until the SQL setup above is correctly applied.
 
 ## Deploy (GitHub Pages)
 

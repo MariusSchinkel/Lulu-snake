@@ -78,7 +78,9 @@ export function createGameState({ gridSize = DEFAULT_GRID, seed = Date.now(), wa
 export function setDirection(state, directionKey) {
   const desired = DIRECTIONS[directionKey];
   if (!desired) return state;
-  const current = state.nextDir;
+  // Validate against the currently active direction to prevent
+  // instant reverse via rapid multi-input within the same tick.
+  const current = state.dir || state.nextDir;
   if (current.x + desired.x === 0 && current.y + desired.y === 0) {
     return state;
   }

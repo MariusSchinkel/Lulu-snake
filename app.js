@@ -45,9 +45,9 @@ const SUPABASE_TABLE = "lulu_scores";
 const SUPABASE_CREATE_SCORE_RPC = "create_highscore";
 const SUPABASE_RENAME_SCORE_RPC = "rename_highscore";
 const MAX_PLAYER_NAME_LENGTH = 24;
-const MAX_SUBMIT_SCORE = 100000;
+const MAX_SUBMIT_SCORE = 20000;
 const HIGHSCORE_EDIT_TOKEN_KEY_PREFIX = "lulu-snake-edit-token-";
-const ENABLE_LEGACY_SUPABASE_FALLBACK = true;
+const EDIT_TOKEN_REGEX = /^[a-f0-9]{48}$/;
 const MAX_HIGHSCORES = 5;
 const RAGE_DURATION_MS = 15000;
 const RAGE_POPUP_MS = 4200;
@@ -81,6 +81,7 @@ const DUEL_TARGET_SCORE = 20;
 const DUEL_CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DUEL_CODE_LEN = 6;
 const DUEL_SNAPSHOT_VERSION = 1;
+const DUEL_FOOD_CLAIM_WINDOW_MS = 90;
 
 let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
@@ -146,6 +147,13 @@ let duel = {
   remoteReady: false,
   activeRound: false,
   sharedSeed: 0,
+  sharedFood: null,
+  foodVersion: 0,
+  scores: {},
+  pendingClaims: [],
+  claimTimer: null,
+  lastClaimedVersion: 0,
+  pendingGrowthVersion: 0,
   localStartAt: 0,
   resultLocked: false,
   resultText: "",
@@ -373,6 +381,15 @@ function normalizeScore(rawScore) {
   return Math.max(0, Math.min(MAX_SUBMIT_SCORE, Math.floor(Number(rawScore) || 0)));
 }
 
+function isScoreInAllowedRange(rawScore) {
+  const score = Number(rawScore);
+  return Number.isFinite(score) && Math.floor(score) >= 0 && Math.floor(score) <= MAX_SUBMIT_SCORE;
+}
+
+function isValidEditToken(rawToken) {
+  return EDIT_TOKEN_REGEX.test(String(rawToken || "").trim().toLowerCase());
+}
+
 function editTokenStorageKey(id) {
   return `${HIGHSCORE_EDIT_TOKEN_KEY_PREFIX}${id}`;
 }
@@ -385,13 +402,13 @@ function createEditToken() {
       return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
     }
   } catch {
-    // Fall through to non-crypto fallback.
+    // Ignore and fail closed below.
   }
-  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  return "";
 }
 
 function storeHighscoreEditToken(id, token) {
-  if (!id || !token) return;
+  if (!id || !isValidEditToken(token)) return;
   highscoreEditTokens.set(id, token);
   try {
     localStorage.setItem(editTokenStorageKey(id), token);
@@ -403,11 +420,14 @@ function storeHighscoreEditToken(id, token) {
 function readHighscoreEditToken(id) {
   if (!id) return "";
   const inMemory = highscoreEditTokens.get(id);
-  if (inMemory) return inMemory;
+  if (inMemory && isValidEditToken(inMemory)) return inMemory;
   try {
     const stored = localStorage.getItem(editTokenStorageKey(id)) || "";
-    if (stored) highscoreEditTokens.set(id, stored);
-    return stored;
+    if (isValidEditToken(stored)) {
+      highscoreEditTokens.set(id, stored);
+      return stored;
+    }
+    return "";
   } catch {
     return "";
   }
@@ -656,9 +676,9 @@ function readHighscoreCache() {
       parsed.map((entry) => ({
         id: String(entry.id || ""),
         name: normalizeName(entry.name),
-        score: Math.max(0, Number(entry.score) || 0),
+        score: isScoreInAllowedRange(entry.score) ? Math.floor(Number(entry.score)) : null,
         createdAt: Number(entry.createdAt) || Date.now(),
-      }))
+      })).filter((entry) => entry.score !== null)
     );
   } catch {
     return [];
@@ -733,9 +753,33 @@ function sanitizeSnakePayload(rawSnake) {
   return out.length > 0 ? out : null;
 }
 
+function sanitizeFoodCell(rawCell) {
+  if (!rawCell) return null;
+  const x = Number(rawCell.x);
+  const y = Number(rawCell.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return {
+    x: ((Math.floor(x) % CELL_COUNT) + CELL_COUNT) % CELL_COUNT,
+    y: ((Math.floor(y) % CELL_COUNT) + CELL_COUNT) % CELL_COUNT,
+  };
+}
+
 function handleDuelSnapshot(payload) {
   if (!payload || payload.playerId === duelPlayerId) return;
   if (Number(payload.v || 0) !== DUEL_SNAPSHOT_VERSION) return;
+  const payloadFoodVersion = Math.floor(Number(payload.foodVersion) || 0);
+  if (
+    !isDuelHost()
+    && payload.playerId === duel.hostId
+    && payloadFoodVersion > duel.foodVersion
+    && sanitizeFoodCell(payload.food)
+  ) {
+    applyDuelFoodUpdate({
+      food: payload.food,
+      foodVersion: payloadFoodVersion,
+      scores: payload.scores,
+    });
+  }
   const snake = sanitizeSnakePayload(payload.snake);
   if (!snake) return;
   const score = normalizeScore(payload.score);
@@ -795,9 +839,9 @@ function createDuelSpawn(gridSize, asHost) {
   };
 }
 
-function pickDuelFoodCell(gridSize, snake, seed) {
+function pickDuelFoodCell(gridSize, occupiedSegments, seed) {
   let nextSeed = seed >>> 0;
-  const occupied = new Set(snake.map((segment) => `${segment.x},${segment.y}`));
+  const occupied = new Set((occupiedSegments || []).map((segment) => `${segment.x},${segment.y}`));
 
   for (let attempt = 0; attempt < gridSize * gridSize * 2; attempt += 1) {
     nextSeed = nextDuelSeed(nextSeed);
@@ -822,12 +866,187 @@ function pickDuelFoodCell(gridSize, snake, seed) {
   return { food: { x: 0, y: 0 }, seed: nextSeed };
 }
 
+function getDuelOpponentId() {
+  const fromPresence = duel.players.find((id) => id !== duelPlayerId);
+  if (fromPresence) return fromPresence;
+  const fromSnapshot = duel.remoteState?.playerId;
+  return fromSnapshot && fromSnapshot !== duelPlayerId ? fromSnapshot : "";
+}
+
+function isHostPayload(payload) {
+  const sender = String(payload?.playerId || "");
+  return !!sender && !!duel.hostId && sender === duel.hostId;
+}
+
+function isOpponentPayload(payload) {
+  const sender = String(payload?.playerId || "");
+  const opponentId = getDuelOpponentId();
+  return !!sender && !!opponentId && sender === opponentId;
+}
+
+function getDuelScoreFor(playerId) {
+  if (!playerId) return 0;
+  return normalizeScore(duel.scores[playerId] || 0);
+}
+
+function applyDuelFoodUpdate(payload) {
+  const food = sanitizeFoodCell(payload?.food);
+  if (!food) return;
+  const incomingVersion = Math.max(1, Math.floor(Number(payload?.foodVersion) || 0));
+  if (incomingVersion < duel.foodVersion) return;
+  const consumedVersion = incomingVersion - 1;
+  const eaterId = String(payload?.eaterId || "");
+
+  if (
+    isDuelRoundActive()
+    && eaterId
+    && duel.pendingGrowthVersion === consumedVersion
+    && eaterId !== duelPlayerId
+    && Array.isArray(state.snake)
+    && state.snake.length > 3
+  ) {
+    state = { ...state, snake: state.snake.slice(0, -1) };
+  }
+  if (duel.pendingGrowthVersion > 0 && duel.pendingGrowthVersion <= consumedVersion) {
+    duel.pendingGrowthVersion = 0;
+  }
+
+  duel.sharedFood = food;
+  duel.foodVersion = incomingVersion;
+  duel.lastClaimedVersion = Math.min(duel.lastClaimedVersion, incomingVersion - 1);
+  if (Number.isFinite(payload?.foodSeed)) {
+    duel.sharedSeed = (Number(payload.foodSeed) >>> 0);
+  }
+
+  if (payload?.scores && typeof payload.scores === "object") {
+    const normalizedScores = {};
+    for (const [id, raw] of Object.entries(payload.scores)) {
+      normalizedScores[String(id)] = normalizeScore(raw);
+    }
+    duel.scores = { ...duel.scores, ...normalizedScores };
+  }
+
+  if (isDuelRoundActive()) {
+    const localScore = getDuelScoreFor(duelPlayerId);
+    state = { ...state, score: localScore, food };
+    updateScore();
+  }
+
+  const opponentId = getDuelOpponentId();
+  const opponentScore = getDuelScoreFor(opponentId);
+  updateOpponentScore(opponentScore);
+  if (duel.remoteState && opponentId && duel.remoteState.playerId === opponentId) {
+    duel.remoteState = { ...duel.remoteState, score: opponentScore };
+  }
+
+  const winnerId = String(payload?.winnerId || "");
+  if (winnerId && isDuelRoundActive()) {
+    if (winnerId === duelPlayerId) {
+      finishDuelRound("You won the 1v1 race.", null);
+      return;
+    }
+    finishDuelRound(`You lost the race. Opponent reached ${DUEL_TARGET_SCORE} treats.`, null);
+  }
+}
+
+function queueDuelFoodClaim(playerId, version, sentAt = Date.now()) {
+  if (!isDuelHost() || !isDuelRoundActive()) return;
+  if (!playerId || version !== duel.foodVersion || version <= 0) return;
+  if (duel.pendingClaims.some((claim) => claim.version === version && claim.playerId === playerId)) {
+    return;
+  }
+  duel.pendingClaims.push({
+    playerId,
+    version,
+    sentAt: Number(sentAt) || Date.now(),
+  });
+  if (duel.claimTimer) return;
+  duel.claimTimer = setTimeout(() => {
+    duel.claimTimer = null;
+    resolveDuelFoodClaims(version);
+  }, DUEL_FOOD_CLAIM_WINDOW_MS);
+}
+
+function resolveDuelFoodClaims(version) {
+  if (!isDuelHost() || !isDuelRoundActive()) return;
+  if (version !== duel.foodVersion || version <= 0) return;
+
+  const claims = duel.pendingClaims.filter((claim) => claim.version === version);
+  duel.pendingClaims = duel.pendingClaims.filter((claim) => claim.version > version);
+  if (claims.length === 0) return;
+
+  claims.sort((a, b) => a.sentAt - b.sentAt || a.playerId.localeCompare(b.playerId));
+  const winnerId = claims[0].playerId;
+
+  const opponentId = getDuelOpponentId();
+  const nextScores = {
+    ...duel.scores,
+    [duelPlayerId]: getDuelScoreFor(duelPlayerId),
+  };
+  if (opponentId) {
+    nextScores[opponentId] = getDuelScoreFor(opponentId);
+  }
+  nextScores[winnerId] = normalizeScore((nextScores[winnerId] || 0) + 1);
+
+  const occupied = [...state.snake];
+  const remoteSnake = getFreshRemoteSnake();
+  if (remoteSnake) occupied.push(...remoteSnake);
+  const pick = pickDuelFoodCell(CELL_COUNT, occupied, duel.sharedSeed || Date.now());
+  const winnerReached = (nextScores[winnerId] || 0) >= DUEL_TARGET_SCORE;
+  const nextPayload = {
+    food: pick.food,
+    foodVersion: duel.foodVersion + 1,
+    foodSeed: pick.seed,
+    scores: nextScores,
+    eaterId: winnerId,
+    winnerId: winnerReached ? winnerId : "",
+  };
+
+  applyDuelFoodUpdate(nextPayload);
+  sendDuelBroadcast("duel-food-update", nextPayload);
+}
+
+function handleLocalDuelFoodClaim() {
+  if (!isDuelRoundActive() || !duel.sharedFood) return;
+  const version = duel.foodVersion;
+  if (version <= 0 || duel.lastClaimedVersion === version) return;
+  duel.pendingGrowthVersion = version;
+  duel.lastClaimedVersion = version;
+  const sentAt = Date.now();
+  if (isDuelHost()) {
+    queueDuelFoodClaim(duelPlayerId, version, sentAt);
+  }
+  sendDuelBroadcast("duel-food-claim", {
+    foodVersion: version,
+    head: state.snake[0],
+    sentAt,
+  });
+}
+
+function handleRemoteDuelFoodClaim(payload) {
+  if (!isDuelHost() || !isDuelRoundActive()) return;
+  if (!payload || payload.playerId === duelPlayerId) return;
+  if (!isOpponentPayload(payload)) return;
+  const version = Math.floor(Number(payload.foodVersion) || 0);
+  if (version <= 0) return;
+  queueDuelFoodClaim(String(payload.playerId), version, Number(payload.sentAt) || Date.now());
+}
+
 function clearDuelRuntimeState() {
   clearTimeout(duelPendingStartTimer);
   duelPendingStartTimer = null;
+  clearTimeout(duel.claimTimer);
+  duel.claimTimer = null;
   duel.localReady = false;
   duel.remoteReady = false;
   duel.activeRound = false;
+  duel.sharedSeed = 0;
+  duel.sharedFood = null;
+  duel.foodVersion = 0;
+  duel.scores = {};
+  duel.pendingClaims = [];
+  duel.lastClaimedVersion = 0;
+  duel.pendingGrowthVersion = 0;
   duel.resultLocked = false;
   duel.resultText = "";
   duel.remoteState = null;
@@ -860,24 +1079,62 @@ function maybeBroadcastDuelSnapshot(force = false) {
     alive: state.alive,
     dir: { x: state.dir.x, y: state.dir.y },
     snake: state.snake.map((segment) => ({ x: segment.x, y: segment.y })),
+    foodVersion: duel.foodVersion,
+    food: duel.sharedFood,
+    scores: isDuelHost() ? duel.scores : undefined,
   });
 }
 
-function beginDuelRound({ seed, startAt = Date.now() }) {
+function beginDuelRound({
+  seed,
+  startAt = Date.now(),
+  food = null,
+  foodVersion = 1,
+  foodSeed = 0,
+  scores = null,
+}) {
   if (!duel.connected) return;
   clearTimeout(duelPendingStartTimer);
   duelPendingStartTimer = null;
-  duel.sharedSeed = seed >>> 0;
+  clearTimeout(duel.claimTimer);
+  duel.claimTimer = null;
+  duel.sharedSeed = (Number(foodSeed) || seed || Date.now()) >>> 0;
   duel.localStartAt = Number(startAt) || Date.now();
   duel.activeRound = true;
+  duel.pendingClaims = [];
+  duel.lastClaimedVersion = 0;
+  duel.pendingGrowthVersion = 0;
   duel.resultLocked = false;
   duel.resultText = "";
   duel.remoteState = null;
+  duel.foodVersion = Math.max(1, Math.floor(Number(foodVersion) || 1));
+
+  const normalizedFood = sanitizeFoodCell(food);
+  if (normalizedFood) {
+    duel.sharedFood = normalizedFood;
+  } else {
+    const hostSpawn = createDuelSpawn(CELL_COUNT, true);
+    const guestSpawn = createDuelSpawn(CELL_COUNT, false);
+    const fallbackPick = pickDuelFoodCell(CELL_COUNT, [...hostSpawn.snake, ...guestSpawn.snake], duel.sharedSeed || seed || Date.now());
+    duel.sharedFood = fallbackPick.food;
+    duel.sharedSeed = fallbackPick.seed;
+  }
+
+  const opponentId = getDuelOpponentId();
+  const nextScores = {};
+  nextScores[duelPlayerId] = normalizeScore(scores?.[duelPlayerId] || 0);
+  if (opponentId) nextScores[opponentId] = normalizeScore(scores?.[opponentId] || 0);
+  duel.scores = nextScores;
+
   updateOpponentScore(0);
   pendingHighscore = null;
   pendingHighscoreName = "";
   hidePendingNameEntry();
-  resetGame({ seed: duel.sharedSeed, duelMode: true });
+  resetGame({ seed: duel.sharedSeed, duelMode: true, duelSharedFood: duel.sharedFood });
+  const localScore = getDuelScoreFor(duelPlayerId);
+  state = { ...state, score: localScore, food: duel.sharedFood };
+  updateScore();
+  updateOpponentScore(getDuelScoreFor(opponentId));
   maybeBroadcastDuelSnapshot(true);
   setDuelStatus(`Room ${duel.roomCode}: live`);
 }
@@ -886,13 +1143,24 @@ function scheduleDuelRoundStart(payload) {
   if (!duel.connected) return;
   const seed = Number(payload?.seed || Date.now()) >>> 0;
   const startAt = Math.max(Date.now() + 120, Number(payload?.startAt || Date.now() + DUEL_START_DELAY_MS));
-  duel.sharedSeed = seed;
+  const food = sanitizeFoodCell(payload?.food);
+  const foodVersion = Math.max(1, Math.floor(Number(payload?.foodVersion) || 1));
+  const foodSeed = (Number(payload?.foodSeed) || seed) >>> 0;
+  const scores = payload?.scores && typeof payload.scores === "object" ? payload.scores : null;
+  duel.sharedSeed = foodSeed;
+  if (food) duel.sharedFood = food;
+  duel.foodVersion = foodVersion;
+  if (scores) {
+    duel.scores = Object.fromEntries(
+      Object.entries(scores).map(([id, value]) => [String(id), normalizeScore(value)])
+    );
+  }
   duel.localStartAt = startAt;
   clearTimeout(duelPendingStartTimer);
   const delay = Math.max(0, startAt - Date.now());
   setDuelStatus(`Room ${duel.roomCode}: starting in ${(delay / 1000).toFixed(1)}s`);
   duelPendingStartTimer = setTimeout(() => {
-    beginDuelRound({ seed, startAt });
+    beginDuelRound({ seed, startAt, food, foodVersion, foodSeed, scores });
   }, delay);
 }
 
@@ -977,13 +1245,22 @@ async function joinDuelRoom(rawCode) {
         }
       })
       .on("broadcast", { event: "duel-start" }, ({ payload }) => {
+        if (!isHostPayload(payload)) return;
         scheduleDuelRoundStart(payload);
       })
       .on("broadcast", { event: "duel-state" }, ({ payload }) => {
         handleDuelSnapshot(payload);
       })
+      .on("broadcast", { event: "duel-food-claim" }, ({ payload }) => {
+        handleRemoteDuelFoodClaim(payload);
+      })
+      .on("broadcast", { event: "duel-food-update" }, ({ payload }) => {
+        if (!isHostPayload(payload)) return;
+        applyDuelFoodUpdate(payload);
+      })
       .on("broadcast", { event: "duel-result" }, ({ payload }) => {
         if (!payload || payload.playerId === duelPlayerId || !isDuelRoundActive()) return;
+        if (!isOpponentPayload(payload)) return;
         const remoteResult = String(payload.result || "");
         if (remoteResult === "lose-crash") {
           finishDuelRound("Askaban-friendly win. Opponent crashed.", null);
@@ -1040,19 +1317,32 @@ function startDuelRoundAsHost() {
     setDuelStatus("Waiting for host to start.");
     return;
   }
+  const startSeed = Date.now() >>> 0;
+  const hostSpawn = createDuelSpawn(CELL_COUNT, true);
+  const guestSpawn = createDuelSpawn(CELL_COUNT, false);
+  const initialPick = pickDuelFoodCell(CELL_COUNT, [...hostSpawn.snake, ...guestSpawn.snake], startSeed);
+  const opponentId = getDuelOpponentId();
+  const startScores = { [duelPlayerId]: 0 };
+  if (opponentId) startScores[opponentId] = 0;
+
   const payload = {
-    seed: Date.now(),
+    seed: startSeed,
     startAt: Date.now() + DUEL_START_DELAY_MS,
+    food: initialPick.food,
+    foodVersion: 1,
+    foodSeed: initialPick.seed,
+    scores: startScores,
   };
   sendDuelBroadcast("duel-start", payload);
   scheduleDuelRoundStart(payload);
 }
 
 function normalizeRemoteRow(row) {
+  if (!row || !isScoreInAllowedRange(row.score)) return null;
   return {
     id: String(row.id),
     name: normalizeName(row.name),
-    score: normalizeScore(row.score),
+    score: Math.floor(Number(row.score)),
     createdAt: Date.parse(row.created_at) || Date.now(),
   };
 }
@@ -1061,6 +1351,7 @@ async function fetchTopHighscoresFromServer() {
   const params = new URLSearchParams();
   params.set("select", "id,name,score,created_at");
   params.set("order", "score.desc,created_at.asc");
+  params.set("score", `lte.${MAX_SUBMIT_SCORE}`);
   params.set("limit", String(MAX_HIGHSCORES));
   const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?${params.toString()}`, {
     headers: supabaseHeaders(),
@@ -1069,7 +1360,7 @@ async function fetchTopHighscoresFromServer() {
     throw new Error(`Failed to fetch highscores (${response.status})`);
   }
   const rows = await response.json();
-  return sortHighscores(rows.map(normalizeRemoteRow));
+  return sortHighscores(rows.map(normalizeRemoteRow).filter((row) => row));
 }
 
 function createSupabaseHttpError(scope, response, payload) {
@@ -1083,17 +1374,6 @@ function createSupabaseHttpError(scope, response, payload) {
     err.details = String(payload.details || payload.hint || "");
   }
   return err;
-}
-
-function shouldFallbackToLegacySupabase(error) {
-  if (!ENABLE_LEGACY_SUPABASE_FALLBACK) return false;
-  const status = Number(error?.status || 0);
-  const text = `${error?.message || ""} ${error?.details || ""} ${error?.code || ""}`.toLowerCase();
-  if (status === 404) return true;
-  if (status !== 400) return false;
-  return text.includes("could not find the function")
-    || text.includes("function public.")
-    || text.includes("does not exist");
 }
 
 function isDigestFunctionMissingError(error) {
@@ -1124,96 +1404,44 @@ async function callSupabaseRpc(rpcName, payload) {
   return data || null;
 }
 
-async function insertHighscoreLegacyOnServer(name, score) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}`, {
-    method: "POST",
-    headers: supabaseHeaders({
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    }),
-    body: JSON.stringify({
-      name: normalizeName(name),
-      score: normalizeScore(score),
-    }),
-  });
-  let rows = null;
-  try {
-    rows = await response.json();
-  } catch {
-    rows = null;
-  }
-  if (!response.ok) {
-    throw createSupabaseHttpError("Legacy insert failed", response, rows);
-  }
-  const first = Array.isArray(rows) ? rows[0] : rows;
-  return first ? normalizeRemoteRow(first) : null;
-}
-
 async function insertHighscoreOnServer(name, score, editToken) {
+  const token = String(editToken || "").trim().toLowerCase();
+  if (!isValidEditToken(token)) {
+    throw new Error("Invalid edit token");
+  }
   try {
     const raw = await callSupabaseRpc(SUPABASE_CREATE_SCORE_RPC, {
       p_name: normalizeName(name),
       p_score: normalizeScore(score),
-      p_edit_token: String(editToken || ""),
+      p_edit_token: token,
     });
     return raw ? normalizeRemoteRow(raw) : null;
   } catch (error) {
     if (isDigestFunctionMissingError(error)) {
       console.error("Supabase RPC misconfigured: digest() is unavailable in create_highscore. Re-run README Supabase SQL fix.");
     }
-    if (!shouldFallbackToLegacySupabase(error)) throw error;
-    console.warn("RPC create_highscore unavailable, falling back to legacy insert.");
-    return insertHighscoreLegacyOnServer(name, score);
+    throw error;
   }
-}
-
-async function updateHighscoreNameLegacyOnServer(id, name) {
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${SUPABASE_TABLE}?id=eq.${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: supabaseHeaders({
-      "Content-Type": "application/json",
-      Prefer: "return=representation",
-    }),
-    body: JSON.stringify({ name: normalizeName(name) }),
-  });
-  let rows = null;
-  try {
-    rows = await response.json();
-  } catch {
-    rows = null;
-  }
-  if (!response.ok) {
-    throw createSupabaseHttpError("Legacy name update failed", response, rows);
-  }
-  const first = Array.isArray(rows) ? rows[0] : rows;
-  return first ? normalizeRemoteRow(first) : null;
 }
 
 async function updateHighscoreNameOnServer(id, name, editToken) {
-  const token = String(editToken || "").trim();
-  if (token) {
-    try {
-      const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
-        p_id: String(id),
-        p_name: normalizeName(name),
-        p_edit_token: token,
-      });
-      if (raw) return normalizeRemoteRow(raw);
-      if (!ENABLE_LEGACY_SUPABASE_FALLBACK) return null;
-      // RPC can return no row when token/hash mismatch during partial migrations.
-      return updateHighscoreNameLegacyOnServer(id, name);
-    } catch (error) {
-      if (isDigestFunctionMissingError(error)) {
-        console.error("Supabase RPC misconfigured: digest() is unavailable in rename_highscore. Re-run README Supabase SQL fix.");
-      }
-      if (!shouldFallbackToLegacySupabase(error)) throw error;
-      console.warn("RPC rename_highscore unavailable, falling back to legacy update.");
-    }
-  } else if (!ENABLE_LEGACY_SUPABASE_FALLBACK) {
+  const token = String(editToken || "").trim().toLowerCase();
+  if (!isValidEditToken(token)) {
     return null;
   }
-
-  return updateHighscoreNameLegacyOnServer(id, name);
+  try {
+    const raw = await callSupabaseRpc(SUPABASE_RENAME_SCORE_RPC, {
+      p_id: String(id),
+      p_name: normalizeName(name),
+      p_edit_token: token,
+    });
+    return raw ? normalizeRemoteRow(raw) : null;
+  } catch (error) {
+    if (isDigestFunctionMissingError(error)) {
+      console.error("Supabase RPC misconfigured: digest() is unavailable in rename_highscore. Re-run README Supabase SQL fix.");
+    }
+    throw error;
+  }
 }
 
 async function refreshHighscoresFromServer() {
@@ -1965,22 +2193,29 @@ function tick() {
       drawGrid();
       return;
     }
+    if (duel.sharedFood) {
+      state = { ...state, food: duel.sharedFood };
+    }
     const wasAlive = state.alive;
     state = stepGame(state);
     advanceBodyWalkFrame();
+    const localScore = getDuelScoreFor(duelPlayerId);
+    const sharedFood = duel.sharedFood || state.food;
+    const ateSharedFood =
+      !!sharedFood &&
+      !!state.snake[0] &&
+      state.snake[0].x === sharedFood.x &&
+      state.snake[0].y === sharedFood.y;
+    state = {
+      ...state,
+      score: localScore,
+      food: sharedFood,
+    };
     updateScore();
-    maybeBroadcastDuelSnapshot();
 
     if (isLocalHeadTouchingRemoteSnake()) {
       maybeBroadcastDuelSnapshot(true);
       finishDuelRound("You touched the opponent snake. You lose this round.", "lose-touch");
-      drawGrid();
-      return;
-    }
-
-    if (state.score >= DUEL_TARGET_SCORE) {
-      maybeBroadcastDuelSnapshot(true);
-      finishDuelRound("You won the 1v1 race.", "win-target");
       drawGrid();
       return;
     }
@@ -1990,6 +2225,10 @@ function tick() {
       drawGrid();
       return;
     }
+    if (ateSharedFood) {
+      handleLocalDuelFoodClaim();
+    }
+    maybeBroadcastDuelSnapshot();
     drawGrid();
     return;
   }
@@ -2097,6 +2336,7 @@ function resetGame(options = {}) {
   const {
     seed = Date.now(),
     duelMode = false,
+    duelSharedFood = null,
   } = options;
   unlockAudioIfNeeded();
   state = createGameState({
@@ -2106,17 +2346,24 @@ function resetGame(options = {}) {
   });
   if (duelMode) {
     const spawn = createDuelSpawn(CELL_COUNT, isDuelHost());
-    const foodPick = pickDuelFoodCell(CELL_COUNT, spawn.snake, state.rngSeed);
+    const hostSpawn = createDuelSpawn(CELL_COUNT, true);
+    const guestSpawn = createDuelSpawn(CELL_COUNT, false);
+    const foodPick = pickDuelFoodCell(CELL_COUNT, [...hostSpawn.snake, ...guestSpawn.snake], state.rngSeed);
+    const nextFood = sanitizeFoodCell(duelSharedFood) || sanitizeFoodCell(duel.sharedFood) || foodPick.food;
+    const nextSeed = Number.isFinite(duel.sharedSeed) && duel.sharedSeed > 0 ? duel.sharedSeed : foodPick.seed;
+    duel.sharedFood = nextFood;
+    duel.sharedSeed = nextSeed;
     state = {
       ...state,
       snake: spawn.snake,
       dir: { ...spawn.dir },
       nextDir: { ...spawn.dir },
-      food: foodPick.food,
-      rngSeed: foodPick.seed,
+      food: nextFood,
+      rngSeed: nextSeed,
+      score: getDuelScoreFor(duelPlayerId),
     };
   }
-  state = { ...state, pointsPerFood: 1 };
+  state = { ...state, pointsPerFood: duelMode ? 0 : 1 };
   treatsSinceRage = 0;
   treatsSinceChaser = 0;
   chaserRecoveryTreatsRemaining = 0;
@@ -2370,10 +2617,10 @@ function openMenu(mode) {
       menuText.textContent = duel.resultText || "Round finished.";
     } else if (duel.connected) {
       menuText.textContent = isDuelReadyToStart()
-        ? `Room ready. Press Start 1v1. First to ${DUEL_TARGET_SCORE}, no touching.`
-        : `Create or join a room, then wait for your opponent. First to ${DUEL_TARGET_SCORE}, no touching.`;
+        ? `Room ready. Press Start 1v1. Shared treat race to ${DUEL_TARGET_SCORE}, no touching.`
+        : `Create or join a room, then wait for your opponent. Shared treat race to ${DUEL_TARGET_SCORE}, no touching.`;
     } else {
-      menuText.textContent = `Create or join a room to play realtime 1v1. First to ${DUEL_TARGET_SCORE}, no touching.`;
+      menuText.textContent = `Create or join a room to play realtime 1v1. Shared treat race to ${DUEL_TARGET_SCORE}, no touching.`;
     }
     updateModeButtons();
     return;
