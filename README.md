@@ -56,6 +56,7 @@ Then open:
 - New `1v1 Online` mode uses Supabase Realtime room codes for live head-to-head races.
 - In 1v1 mode, first player to `20` treats wins.
 - In 1v1 mode, touching the opponent snake causes an immediate loss.
+- In 1v1 mode, players spawn on opposite sides of the board to avoid instant overlap at match start.
 - During 1v1 mode, opponent movement is rendered as a live ghost snake and an opponent score counter.
 - Rage/Askaban/highscore submission are intentionally disabled during active 1v1 rounds to keep the duel deterministic.
 

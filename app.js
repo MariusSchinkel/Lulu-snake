@@ -767,6 +767,61 @@ function isLocalHeadTouchingRemoteSnake() {
   return remoteSnake.some((segment) => segment.x === head.x && segment.y === head.y);
 }
 
+function nextDuelSeed(seed) {
+  return (seed * 1664525 + 1013904223) >>> 0;
+}
+
+function createDuelSpawn(gridSize, asHost) {
+  const y = Math.floor(gridSize / 2);
+  const hostHeadX = Math.max(3, Math.floor(gridSize * 0.24));
+  const guestHeadX = Math.min(gridSize - 4, Math.floor(gridSize * 0.76));
+  if (asHost) {
+    return {
+      dir: { x: 1, y: 0 },
+      snake: [
+        { x: hostHeadX, y },
+        { x: hostHeadX - 1, y },
+        { x: hostHeadX - 2, y },
+      ],
+    };
+  }
+  return {
+    dir: { x: -1, y: 0 },
+    snake: [
+      { x: guestHeadX, y },
+      { x: guestHeadX + 1, y },
+      { x: guestHeadX + 2, y },
+    ],
+  };
+}
+
+function pickDuelFoodCell(gridSize, snake, seed) {
+  let nextSeed = seed >>> 0;
+  const occupied = new Set(snake.map((segment) => `${segment.x},${segment.y}`));
+
+  for (let attempt = 0; attempt < gridSize * gridSize * 2; attempt += 1) {
+    nextSeed = nextDuelSeed(nextSeed);
+    const x = nextSeed % gridSize;
+    nextSeed = nextDuelSeed(nextSeed);
+    const y = nextSeed % gridSize;
+    const key = `${x},${y}`;
+    if (!occupied.has(key)) {
+      return { food: { x, y }, seed: nextSeed };
+    }
+  }
+
+  for (let y = 0; y < gridSize; y += 1) {
+    for (let x = 0; x < gridSize; x += 1) {
+      const key = `${x},${y}`;
+      if (!occupied.has(key)) {
+        return { food: { x, y }, seed: nextSeed };
+      }
+    }
+  }
+
+  return { food: { x: 0, y: 0 }, seed: nextSeed };
+}
+
 function clearDuelRuntimeState() {
   clearTimeout(duelPendingStartTimer);
   duelPendingStartTimer = null;
@@ -2049,6 +2104,18 @@ function resetGame(options = {}) {
     seed,
     wallsEnabled: false,
   });
+  if (duelMode) {
+    const spawn = createDuelSpawn(CELL_COUNT, isDuelHost());
+    const foodPick = pickDuelFoodCell(CELL_COUNT, spawn.snake, state.rngSeed);
+    state = {
+      ...state,
+      snake: spawn.snake,
+      dir: { ...spawn.dir },
+      nextDir: { ...spawn.dir },
+      food: foodPick.food,
+      rngSeed: foodPick.seed,
+    };
+  }
   state = { ...state, pointsPerFood: 1 };
   treatsSinceRage = 0;
   treatsSinceChaser = 0;
