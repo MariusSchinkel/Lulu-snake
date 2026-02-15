@@ -127,7 +127,8 @@ supabase secrets set \
   SUPABASE_URL="https://YOUR_PROJECT_REF.supabase.co" \
   SUPABASE_SERVICE_ROLE_KEY="YOUR_SERVICE_ROLE_KEY" \
   TURNSTILE_SECRET_KEY="YOUR_TURNSTILE_SECRET_KEY" \
-  ALLOWED_ORIGINS="https://lulu-snake.de,https://www.lulu-snake.de,http://localhost:8000"
+  ALLOWED_ORIGINS="https://lulu-snake.de,https://www.lulu-snake.de,http://localhost:8000" \
+  TURNSTILE_ALLOWED_HOSTNAMES="lulu-snake.de,www.lulu-snake.de,localhost"
 ```
 
 3. Deploy the function:
@@ -143,6 +144,7 @@ const TURNSTILE_SITE_KEY = "YOUR_TURNSTILE_SITE_KEY";
 ```
 
 5. Ensure Cloudflare Turnstile allows your domains (`lulu-snake.de`, `www.lulu-snake.de`, `localhost` for dev).
+6. Route production traffic through a trusted edge that provides `cf-connecting-ip` to the Edge Function.
 
 ### Edge Function Files
 
@@ -177,6 +179,17 @@ limit 200;
 
 Client config is set in `app.js`.
 Legacy direct table-write fallback remains removed (fail-closed).
+
+### Clickjacking Protection
+
+- The app includes a runtime anti-frame fallback (`#anti-clickjack` + JS frame busting) for static hosting.
+- For production, enforce framing policy with an HTTP response header at your edge/proxy:
+
+```http
+Content-Security-Policy: frame-ancestors 'none'
+```
+
+Meta-delivered CSP cannot fully replace header enforcement for `frame-ancestors`.
 
 ## Deploy (GitHub Pages)
 

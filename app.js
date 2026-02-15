@@ -1,4 +1,22 @@
 import { createGameState, setDirection, stepGame } from "./game.js";
+import { createSupabaseRealtimeClient } from "./supabase-realtime-client.js";
+
+function enforceNoFrameEmbedding() {
+  const antiClickjackStyle = document.getElementById("anti-clickjack");
+  if (window.top === window.self) {
+    if (antiClickjackStyle) antiClickjackStyle.remove();
+    return;
+  }
+  // Keep the page hidden when embedded; header CSP should still enforce framing in production.
+  try {
+    window.top.location = window.self.location.href;
+  } catch {
+    // Cross-origin frame access may throw.
+  }
+  throw new Error("Framed rendering is blocked.");
+}
+
+enforceNoFrameEmbedding();
 
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
@@ -48,6 +66,7 @@ const TURNSTILE_WAIT_MS = 8000;
 const MAX_PLAYER_NAME_LENGTH = 24;
 const MAX_SUBMIT_SCORE = 20000;
 const HIGHSCORE_EDIT_TOKEN_KEY_PREFIX = "lulu-snake-edit-token-";
+const HIGHSCORE_EDIT_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const EDIT_TOKEN_REGEX = /^[a-f0-9]{48}$/;
 const MAX_HIGHSCORES = 5;
 const RAGE_DURATION_MS = 15000;
@@ -140,7 +159,6 @@ let swipeLastY = 0;
 const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
 let supabaseRealtimeClient = null;
-let supabaseRealtimeClientPromise = null;
 let duelPlayerId = createEditToken();
 let duelPendingStartTimer = null;
 let duelLastBroadcastTs = 0;
@@ -401,6 +419,39 @@ function editTokenStorageKey(id) {
   return `${HIGHSCORE_EDIT_TOKEN_KEY_PREFIX}${id}`;
 }
 
+function parseStoredEditTokenRecord(rawValue) {
+  const raw = String(rawValue || "");
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const token = String(parsed?.token || "").trim().toLowerCase();
+    const expiresAt = Number(parsed?.expiresAt);
+    if (!isValidEditToken(token)) return null;
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) return null;
+    return { token, expiresAt, needsRewrite: false };
+  } catch {
+    const legacyToken = raw.trim().toLowerCase();
+    if (!isValidEditToken(legacyToken)) return null;
+    return { token: legacyToken, expiresAt: Date.now() + HIGHSCORE_EDIT_TOKEN_TTL_MS, needsRewrite: true };
+  }
+}
+
+function purgeExpiredStoredEditTokens() {
+  try {
+    const now = Date.now();
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (!key || !key.startsWith(HIGHSCORE_EDIT_TOKEN_KEY_PREFIX)) continue;
+      const record = parseStoredEditTokenRecord(localStorage.getItem(key));
+      if (!record || record.expiresAt <= now) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // Ignore storage access issues.
+  }
+}
+
 function createEditToken() {
   try {
     if (window.crypto?.getRandomValues) {
@@ -416,9 +467,11 @@ function createEditToken() {
 
 function storeHighscoreEditToken(id, token) {
   if (!id || !isValidEditToken(token)) return;
-  highscoreEditTokens.set(id, token);
+  const normalized = String(token || "").trim().toLowerCase();
+  const expiresAt = Date.now() + HIGHSCORE_EDIT_TOKEN_TTL_MS;
+  highscoreEditTokens.set(id, { token: normalized, expiresAt });
   try {
-    localStorage.setItem(editTokenStorageKey(id), token);
+    localStorage.setItem(editTokenStorageKey(id), JSON.stringify({ token: normalized, expiresAt }));
   } catch {
     // Ignore storage errors (private mode / quota).
   }
@@ -426,15 +479,27 @@ function storeHighscoreEditToken(id, token) {
 
 function readHighscoreEditToken(id) {
   if (!id) return "";
+  const now = Date.now();
   const inMemory = highscoreEditTokens.get(id);
-  if (inMemory && isValidEditToken(inMemory)) return inMemory;
+  if (inMemory && isValidEditToken(inMemory.token) && inMemory.expiresAt > now) return inMemory.token;
+  if (inMemory && inMemory.expiresAt <= now) {
+    highscoreEditTokens.delete(id);
+  }
   try {
-    const stored = localStorage.getItem(editTokenStorageKey(id)) || "";
-    if (isValidEditToken(stored)) {
-      highscoreEditTokens.set(id, stored);
-      return stored;
+    const rawStored = localStorage.getItem(editTokenStorageKey(id));
+    const stored = parseStoredEditTokenRecord(rawStored);
+    if (!stored || stored.expiresAt <= now) {
+      localStorage.removeItem(editTokenStorageKey(id));
+      return "";
     }
-    return "";
+    highscoreEditTokens.set(id, { token: stored.token, expiresAt: stored.expiresAt });
+    if (stored.needsRewrite) {
+      localStorage.setItem(editTokenStorageKey(id), JSON.stringify({
+        token: stored.token,
+        expiresAt: stored.expiresAt,
+      }));
+    }
+    return stored.token;
   } catch {
     return "";
   }
@@ -810,18 +875,8 @@ async function requestTurnstileToken(action) {
 
 async function ensureSupabaseRealtimeClient() {
   if (supabaseRealtimeClient) return supabaseRealtimeClient;
-  if (!supabaseRealtimeClientPromise) {
-    supabaseRealtimeClientPromise = import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm")
-      .then(({ createClient }) => createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: false },
-        realtime: { params: { eventsPerSecond: 12 } },
-      }))
-      .then((client) => {
-        supabaseRealtimeClient = client;
-        return client;
-      });
-  }
-  return supabaseRealtimeClientPromise;
+  supabaseRealtimeClient = createSupabaseRealtimeClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return supabaseRealtimeClient;
 }
 
 function duelChannelName(roomCode) {
@@ -2682,6 +2737,7 @@ function handleGameOver(score) {
 }
 
 function initHighscores() {
+  purgeExpiredStoredEditTokens();
   highscores = readHighscoreCache();
   renderHighscores();
   void refreshHighscoresFromServer();

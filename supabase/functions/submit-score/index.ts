@@ -7,6 +7,10 @@ const ALLOWED_ORIGINS = (Deno.env.get("ALLOWED_ORIGINS") || "")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
+const TURNSTILE_ALLOWED_HOSTNAMES = (Deno.env.get("TURNSTILE_ALLOWED_HOSTNAMES") || "")
+  .split(",")
+  .map((item) => item.trim().toLowerCase())
+  .filter(Boolean);
 
 const MAX_PLAYER_NAME_LENGTH = 24;
 const MAX_SUBMIT_SCORE = 20000;
@@ -16,7 +20,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env");
 }
 
-let adminClient: ReturnType<typeof createClient> | null = null;
+let adminClient: ReturnType<typeof createClient<any>> | null = null;
 
 function getAdminClient() {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
@@ -45,6 +49,19 @@ type ScoreRenameRequest = {
 };
 
 type ScoreRequest = ScoreCreateRequest | ScoreRenameRequest;
+
+function hostnameFromOrigin(origin: string) {
+  try {
+    return new URL(origin).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+const ALLOWED_TURNSTILE_HOSTNAMES = new Set([
+  ...TURNSTILE_ALLOWED_HOSTNAMES,
+  ...ALLOWED_ORIGINS.map(hostnameFromOrigin).filter(Boolean),
+]);
 
 function buildCorsHeaders(origin: string | null) {
   const allowOrigin = origin && (ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin))
@@ -87,13 +104,26 @@ function normalizeScore(rawScore: number) {
   return Math.floor(numeric);
 }
 
-function extractIp(req: Request) {
+function isValidIpLiteral(value: string) {
+  const ip = String(value || "").trim();
+  if (!ip) return false;
+  if (ip.includes(".")) {
+    const octets = ip.split(".");
+    if (octets.length !== 4) return false;
+    return octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) >= 0 && Number(octet) <= 255);
+  }
+  if (!ip.includes(":")) return false;
+  if (ip.includes(":::")) return false;
+  return /^[0-9a-f:]+$/i.test(ip);
+}
+
+function extractIp(req: Request, origin: string | null) {
   const cfIp = req.headers.get("cf-connecting-ip");
-  if (cfIp) return cfIp;
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0].trim();
-  const real = req.headers.get("x-real-ip");
-  if (real) return real;
+  if (cfIp && isValidIpLiteral(cfIp)) return cfIp.trim();
+  const originHost = origin ? hostnameFromOrigin(origin) : "";
+  if (originHost === "localhost" || originHost === "127.0.0.1" || originHost === "::1") {
+    return "127.0.0.1";
+  }
   return null;
 }
 
@@ -103,7 +133,7 @@ function isOriginAllowed(origin: string | null) {
   return ALLOWED_ORIGINS.includes(origin);
 }
 
-async function verifyTurnstile(token: string, remoteIp: string | null) {
+async function verifyTurnstile(token: string, remoteIp: string | null, expectedAction: string) {
   if (!TURNSTILE_SECRET_KEY) {
     return { ok: false, reason: "turnstile_not_configured" };
   }
@@ -132,6 +162,22 @@ async function verifyTurnstile(token: string, remoteIp: string | null) {
     return { ok: false, reason: `turnstile_${codes}` };
   }
 
+  const action = String(data?.action || "");
+  if (!action || action !== expectedAction) {
+    return { ok: false, reason: "turnstile_action_mismatch" };
+  }
+
+  const hostname = String(data?.hostname || "").toLowerCase();
+  if (!hostname) {
+    return { ok: false, reason: "turnstile_hostname_missing" };
+  }
+  if (ALLOWED_TURNSTILE_HOSTNAMES.size === 0) {
+    return { ok: false, reason: "turnstile_hostnames_not_configured" };
+  }
+  if (!ALLOWED_TURNSTILE_HOSTNAMES.has(hostname)) {
+    return { ok: false, reason: "turnstile_hostname_mismatch" };
+  }
+
   return { ok: true, reason: "ok" };
 }
 
@@ -157,10 +203,22 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Invalid JSON" }, 400, origin);
   }
 
-  const ip = extractIp(req);
+  const expectedTurnstileAction = body?.action === "create"
+    ? "score_create"
+    : body?.action === "rename"
+    ? "score_rename"
+    : "";
+  if (!expectedTurnstileAction) {
+    return jsonResponse({ error: "Invalid action" }, 400, origin);
+  }
+
+  const ip = extractIp(req, origin);
+  if (!ip) {
+    return jsonResponse({ error: "Unable to verify client IP" }, 400, origin);
+  }
   const userAgent = req.headers.get("user-agent") || "";
 
-  const turnstile = await verifyTurnstile(String(body?.captchaToken || ""), ip);
+  const turnstile = await verifyTurnstile(String(body?.captchaToken || ""), ip, expectedTurnstileAction);
   if (!turnstile.ok) {
     return jsonResponse({ error: "Captcha failed", reason: turnstile.reason }, 403, origin);
   }
@@ -196,7 +254,7 @@ Deno.serve(async (req) => {
 
     if (error) {
       console.error("create_highscore_secure failed", error);
-      return jsonResponse({ error: "Create failed", details: error.message }, 400, origin);
+      return jsonResponse({ error: "Create failed" }, 400, origin);
     }
 
     const row = Array.isArray(data) ? data[0] : data;
@@ -226,7 +284,7 @@ Deno.serve(async (req) => {
 
     if (error) {
       console.error("rename_highscore_secure failed", error);
-      return jsonResponse({ error: "Rename failed", details: error.message }, 400, origin);
+      return jsonResponse({ error: "Rename failed" }, 400, origin);
     }
 
     const row = Array.isArray(data) ? data[0] : data;
