@@ -82,6 +82,7 @@ const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const TAP_DEADZONE_PX = 12;
+const TAP_SECONDARY_AXIS_MIN_PX = 10;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
 const CHASER_SPEED_FACTOR = 1.12;
@@ -160,8 +161,6 @@ let swipeStartY = 0;
 let swipeLastX = 0;
 let swipeLastY = 0;
 let swipeDidTriggerMove = false;
-let lastTapX = null;
-let lastTapY = null;
 const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
 let supabaseRealtimeClient = null;
@@ -2536,8 +2535,6 @@ function resetGame(options = {}) {
   document.body.classList.remove("rage-mode");
   lastFoodKey = null;
   bodyFrameIndex = 0;
-  lastTapX = null;
-  lastTapY = null;
   paused = false;
   gameStarted = true;
   pauseButton.textContent = "Pause";
@@ -2832,23 +2829,77 @@ function handleSwipeDirection(dx, dy) {
   return true;
 }
 
+function getDirectionKeyFromVector(vec) {
+  if (!vec) return "right";
+  if (vec.x === 0 && vec.y === -1) return "up";
+  if (vec.x === 0 && vec.y === 1) return "down";
+  if (vec.x === -1 && vec.y === 0) return "left";
+  if (vec.x === 1 && vec.y === 0) return "right";
+  return "right";
+}
+
+function getDirectionVector(directionKey) {
+  if (directionKey === "up") return { x: 0, y: -1 };
+  if (directionKey === "down") return { x: 0, y: 1 };
+  if (directionKey === "left") return { x: -1, y: 0 };
+  return { x: 1, y: 0 };
+}
+
+function isReverseOfCurrentDirection(directionKey) {
+  const desired = getDirectionVector(directionKey);
+  const current = state.dir || state.nextDir || { x: 1, y: 0 };
+  return current.x + desired.x === 0 && current.y + desired.y === 0;
+}
+
+function pickDirectionFromTapIntent(dx, dy) {
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  const horizontalPrimary = absX >= absY;
+  const primary = horizontalPrimary ? (dx >= 0 ? "right" : "left") : (dy >= 0 ? "down" : "up");
+  const minorAxis = horizontalPrimary ? absY : absX;
+  const secondary = minorAxis >= TAP_SECONDARY_AXIS_MIN_PX
+    ? (horizontalPrimary ? (dy >= 0 ? "down" : "up") : (dx >= 0 ? "right" : "left"))
+    : null;
+  const currentKey = getDirectionKeyFromVector(state.dir || state.nextDir || { x: 1, y: 0 });
+  const ranked = [primary, secondary, currentKey].filter(Boolean);
+
+  for (const key of ranked) {
+    if (!isReverseOfCurrentDirection(key)) return key;
+  }
+
+  // Final safety fallback: pick any non-reverse direction that best aligns with tap vector.
+  let bestKey = currentKey;
+  let bestScore = -Infinity;
+  for (const key of ["up", "down", "left", "right"]) {
+    if (isReverseOfCurrentDirection(key)) continue;
+    const vec = getDirectionVector(key);
+    const score = vec.x * dx + vec.y * dy;
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  }
+  return bestKey;
+}
+
 function handleTapDirection(clientX, clientY) {
   if (!gameStarted || !state.alive) return false;
   const rect = canvas.getBoundingClientRect();
-  const fallbackX = rect.width > 0 ? rect.left + rect.width / 2 : window.innerWidth / 2;
-  const fallbackY = rect.height > 0 ? rect.top + rect.height / 2 : window.innerHeight / 2;
-  const fromX = Number.isFinite(lastTapX) ? lastTapX : fallbackX;
-  const fromY = Number.isFinite(lastTapY) ? lastTapY : fallbackY;
-  const dx = clientX - fromX;
-  const dy = clientY - fromY;
-  lastTapX = clientX;
-  lastTapY = clientY;
-  if (Math.abs(dx) < TAP_DEADZONE_PX && Math.abs(dy) < TAP_DEADZONE_PX) return false;
-  if (Math.abs(dx) > Math.abs(dy)) {
-    handleDirection(dx > 0 ? "right" : "left");
-  } else {
-    handleDirection(dy > 0 ? "down" : "up");
-  }
+  const gridSize = Number(state.gridSize) || CELL_COUNT;
+  const head = state.snake?.[0];
+  const cellW = rect.width > 0 ? rect.width / gridSize : 0;
+  const cellH = rect.height > 0 ? rect.height / gridSize : 0;
+  const anchorX = head && cellW > 0
+    ? rect.left + (head.x + 0.5) * cellW
+    : (rect.width > 0 ? rect.left + rect.width / 2 : window.innerWidth / 2);
+  const anchorY = head && cellH > 0
+    ? rect.top + (head.y + 0.5) * cellH
+    : (rect.height > 0 ? rect.top + rect.height / 2 : window.innerHeight / 2);
+  const dx = clientX - anchorX;
+  const dy = clientY - anchorY;
+  const adaptiveDeadzone = Math.max(TAP_DEADZONE_PX, Math.min(cellW || TAP_DEADZONE_PX, cellH || TAP_DEADZONE_PX) * 0.35);
+  if (Math.abs(dx) < adaptiveDeadzone && Math.abs(dy) < adaptiveDeadzone) return false;
+  handleDirection(pickDirectionFromTapIntent(dx, dy));
   return true;
 }
 
@@ -2975,7 +3026,7 @@ if (duelJoinButton) {
 }
 
 document.addEventListener("pointerdown", (event) => {
-  if (event.pointerType === "mouse") return;
+  if (event.pointerType === "mouse" && event.button !== 0) return;
   if (isSwipeInputTarget(event.target)) return;
   swipePointerId = event.pointerId;
   swipeStartX = event.clientX;

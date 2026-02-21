@@ -18,7 +18,7 @@ Then open:
 
 - `Arrow keys` or `WASD`: move
 - `Swipe anywhere on screen` (touch/pen): move
-- `Tap steering` (touch/pen): direction is based on the vector from your previous tap to your current tap (first tap uses board center)
+- `Tap steering` (touch/pen/mouse click): tap direction is resolved from the snake-head position toward your tap target, with reverse-safe fallback, and works across the full screen (outside the board too)
 - `Space`: pause/resume
 - `R`: restart
 - `Speaker` button toggles music (`🔊` on, `🔇` muted)
@@ -37,7 +37,7 @@ Then open:
 - Corner sprite rendering has been removed; turns now use regular oriented body segments, with tail sprite retained.
 - Opaque walk-frame backgrounds are auto-cleaned from image edges when possible.
 - Swipe threshold is lower on mobile screens for quicker touch direction changes.
-- Tap-to-steer is enabled for mobile/online play: each short tap steers relative to the previous tap position for quicker chained turns.
+- Tap-to-steer is enabled for mobile/online play: each short tap aims from the snake head to your tap location and picks the closest valid turn (no accidental reverse), including taps outside the board area.
 - Rage audio now primes `lulu-rage.mp3` on user gesture and retries during active rage if a mobile autoplay block occurs.
 - Askaban audio now has dedicated mobile priming and retry-on-gesture handling to improve chase-track reliability.
 - During Lulu-Rage, background music is paused and resumes after rage ends to avoid overlapping tracks.
