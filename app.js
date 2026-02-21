@@ -81,6 +81,7 @@ const BG_RESTORE_FADE_MS = 1500;
 const RAGE_OUT_FADE_MS = 900;
 const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
+const TAP_DEADZONE_PX = 12;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
 const CHASER_SPEED_FACTOR = 1.12;
@@ -154,8 +155,11 @@ let chaserAlertTimer = null;
 let bgFadeRaf = null;
 let rageFadeRaf = null;
 let swipePointerId = null;
+let swipeStartX = 0;
+let swipeStartY = 0;
 let swipeLastX = 0;
 let swipeLastY = 0;
+let swipeDidTriggerMove = false;
 const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
 let supabaseRealtimeClient = null;
@@ -2824,6 +2828,22 @@ function handleSwipeDirection(dx, dy) {
   return true;
 }
 
+function handleTapDirection(clientX, clientY) {
+  if (!gameStarted || !state.alive) return false;
+  const rect = canvas.getBoundingClientRect();
+  const centerX = rect.width > 0 ? rect.left + rect.width / 2 : window.innerWidth / 2;
+  const centerY = rect.height > 0 ? rect.top + rect.height / 2 : window.innerHeight / 2;
+  const dx = clientX - centerX;
+  const dy = clientY - centerY;
+  if (Math.abs(dx) < TAP_DEADZONE_PX && Math.abs(dy) < TAP_DEADZONE_PX) return false;
+  if (Math.abs(dx) > Math.abs(dy)) {
+    handleDirection(dx > 0 ? "right" : "left");
+  } else {
+    handleDirection(dy > 0 ? "down" : "up");
+  }
+  return true;
+}
+
 function handleKey(event) {
   const key = event.key.toLowerCase();
   const target = event.target;
@@ -2950,8 +2970,11 @@ document.addEventListener("pointerdown", (event) => {
   if (event.pointerType === "mouse") return;
   if (isSwipeInputTarget(event.target)) return;
   swipePointerId = event.pointerId;
+  swipeStartX = event.clientX;
+  swipeStartY = event.clientY;
   swipeLastX = event.clientX;
   swipeLastY = event.clientY;
+  swipeDidTriggerMove = false;
 });
 
 document.addEventListener("pointermove", (event) => {
@@ -2961,11 +2984,21 @@ document.addEventListener("pointermove", (event) => {
   if (!handleSwipeDirection(dx, dy)) return;
   swipeLastX = event.clientX;
   swipeLastY = event.clientY;
+  swipeDidTriggerMove = true;
 });
 
 function endSwipe(event) {
   if (event.pointerId !== swipePointerId) return;
+  if (!swipeDidTriggerMove) {
+    const travelX = event.clientX - swipeStartX;
+    const travelY = event.clientY - swipeStartY;
+    const travelThreshold = window.innerWidth <= 640 ? SWIPE_THRESHOLD_MOBILE_PX : SWIPE_THRESHOLD_PX;
+    if (Math.abs(travelX) < travelThreshold && Math.abs(travelY) < travelThreshold) {
+      handleTapDirection(event.clientX, event.clientY);
+    }
+  }
   swipePointerId = null;
+  swipeDidTriggerMove = false;
 }
 
 document.addEventListener("pointerup", endSwipe);
