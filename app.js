@@ -160,6 +160,8 @@ let swipeStartY = 0;
 let swipeLastX = 0;
 let swipeLastY = 0;
 let swipeDidTriggerMove = false;
+let lastTapX = null;
+let lastTapY = null;
 const highscoreEditTokens = new Map();
 const HIDDEN_FOOD = { x: -9999, y: -9999 };
 let supabaseRealtimeClient = null;
@@ -2534,6 +2536,8 @@ function resetGame(options = {}) {
   document.body.classList.remove("rage-mode");
   lastFoodKey = null;
   bodyFrameIndex = 0;
+  lastTapX = null;
+  lastTapY = null;
   paused = false;
   gameStarted = true;
   pauseButton.textContent = "Pause";
@@ -2831,10 +2835,14 @@ function handleSwipeDirection(dx, dy) {
 function handleTapDirection(clientX, clientY) {
   if (!gameStarted || !state.alive) return false;
   const rect = canvas.getBoundingClientRect();
-  const centerX = rect.width > 0 ? rect.left + rect.width / 2 : window.innerWidth / 2;
-  const centerY = rect.height > 0 ? rect.top + rect.height / 2 : window.innerHeight / 2;
-  const dx = clientX - centerX;
-  const dy = clientY - centerY;
+  const fallbackX = rect.width > 0 ? rect.left + rect.width / 2 : window.innerWidth / 2;
+  const fallbackY = rect.height > 0 ? rect.top + rect.height / 2 : window.innerHeight / 2;
+  const fromX = Number.isFinite(lastTapX) ? lastTapX : fallbackX;
+  const fromY = Number.isFinite(lastTapY) ? lastTapY : fallbackY;
+  const dx = clientX - fromX;
+  const dy = clientY - fromY;
+  lastTapX = clientX;
+  lastTapY = clientY;
   if (Math.abs(dx) < TAP_DEADZONE_PX && Math.abs(dy) < TAP_DEADZONE_PX) return false;
   if (Math.abs(dx) > Math.abs(dy)) {
     handleDirection(dx > 0 ? "right" : "left");
