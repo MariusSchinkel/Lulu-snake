@@ -410,6 +410,36 @@ body.rage-mode .game-title span {
   z-index: 3;
 }
 
+.combo-indicator {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 2;
+  pointer-events: none;
+  min-width: 132px;
+  max-width: min(68%, 360px);
+  padding: 7px 10px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(73, 46, 18, 0.7);
+  background: linear-gradient(150deg, rgba(255, 245, 215, 0.96) 0%, rgba(241, 216, 164, 0.92) 100%);
+  box-shadow: 0 7px 16px rgba(57, 33, 10, 0.24);
+  color: #3a250f;
+  display: grid;
+  gap: 2px;
+}
+
+.combo-indicator strong {
+  font-size: 12px;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+}
+
+.combo-indicator span {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #5b3a18;
+}
+
 .rage-popup {
   position: absolute;
   inset: 12px;
@@ -600,7 +630,7 @@ body.rage-mode .game-title span {
 
 .mode-switch {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -837,6 +867,13 @@ button:active {
     padding: 6px;
   }
 
+  .combo-indicator {
+    top: 9px;
+    left: 9px;
+    min-width: 116px;
+    padding: 6px 8px 7px;
+  }
+
   .overlay,
   .rage-popup {
     inset: 6px;
@@ -888,6 +925,10 @@ button:active {
 
   #duel-join {
     grid-area: join;
+  }
+
+  .mode-switch {
+    grid-template-columns: 1fr;
   }
 
 }

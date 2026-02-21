@@ -35,6 +35,7 @@ const nameEntryInput = document.getElementById("name-entry-input");
 const saveScoreButton = document.getElementById("save-score");
 const startGameButton = document.getElementById("start-game");
 const modeSingleButton = document.getElementById("mode-single");
+const modeDailyButton = document.getElementById("mode-daily");
 const modeDuelButton = document.getElementById("mode-duel");
 const duelPanel = document.getElementById("duel-panel");
 const duelRoomInput = document.getElementById("duel-room-input");
@@ -47,6 +48,9 @@ const chaserNameEl = document.getElementById("chaser-name");
 const audioToggle = document.getElementById("audio-toggle");
 const pauseButton = document.getElementById("pause");
 const restartButton = document.getElementById("restart");
+const comboIndicator = document.getElementById("combo-indicator");
+const comboTextEl = document.getElementById("combo-text");
+const comboMetaEl = document.getElementById("combo-meta");
 const shellEl = document.querySelector(".shell");
 const topbarEl = document.querySelector(".topbar");
 const controlsEl = document.querySelector(".controls");
@@ -56,6 +60,7 @@ const CELL_COUNT = 20;
 const LAST_NAME_KEY = "lulu-snake-last-name";
 const HIGHSCORE_CACHE_KEY = "lulu-snake-highscores-cache-v2";
 const AUDIO_MUTED_KEY = "lulu-snake-audio-muted";
+const DAILY_BESTS_KEY = "lulu-snake-daily-bests-v1";
 const SUPABASE_URL = "https://tctrtklwqmynkfssipgc.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRjdHJ0a2x3cW15bmtmc3NpcGdjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0NjU0MTAsImV4cCI6MjA4NjA0MTQxMH0.Hi640Ia4HN4Unjvay5hZ91yTrZUB9DVRLXushyMuh_w";
@@ -83,6 +88,14 @@ const SWIPE_THRESHOLD_PX = 26;
 const SWIPE_THRESHOLD_MOBILE_PX = 18;
 const TAP_DEADZONE_PX = 12;
 const TAP_SECONDARY_AXIS_MIN_PX = 10;
+const COMBO_WINDOW_MS = 2600;
+const COMBO_STEP2_COUNT = 3;
+const COMBO_STEP3_COUNT = 6;
+const POWERUP_SPAWN_CHANCE_PCT = 24;
+const POWERUP_SLOW_MS = 7000;
+const POWERUP_SLOW_TICK_BONUS_MS = 58;
+const POWERUP_MAGNET_MS = 8000;
+const POWERUP_MAGNET_RADIUS = 6;
 const BASE_START_TICK_MS = 230;
 const CHASER_DURATION_MS = 45000;
 const CHASER_SPEED_FACTOR = 1.12;
@@ -109,6 +122,14 @@ let state = createGameState({ gridSize: CELL_COUNT, seed: 123456789 });
 let paused = false;
 let timerId = null;
 let selectedMode = "single";
+let activeFoodPowerup = "";
+let comboCount = 0;
+let comboMultiplier = 1;
+let comboExpiresAt = 0;
+let slowPowerupUntil = 0;
+let magnetPowerupUntil = 0;
+let shieldCharges = 0;
+let dailyLastResult = null;
 let images = {
   head: null,
   bodyFrames: [],
@@ -316,6 +337,180 @@ function isDuelSelected() {
   return selectedMode === "duel";
 }
 
+function isDailySelected() {
+  return selectedMode === "daily";
+}
+
+function getUtcDateKey(date = new Date()) {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function hashStringSeed(input) {
+  let hash = 2166136261 >>> 0;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function getDailyChallengeSeed(date = new Date()) {
+  return hashStringSeed(`lulu-daily-${getUtcDateKey(date)}`);
+}
+
+function readDailyBests() {
+  try {
+    const raw = localStorage.getItem(DAILY_BESTS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function getDailyBestScore(date = new Date()) {
+  const key = getUtcDateKey(date);
+  const bests = readDailyBests();
+  const raw = Number(bests[key]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}
+
+function storeDailyBestScore(score, date = new Date()) {
+  const safeScore = Math.max(0, Math.floor(Number(score) || 0));
+  const key = getUtcDateKey(date);
+  const bests = readDailyBests();
+  const current = Number(bests[key]) || 0;
+  if (safeScore <= current) return current;
+  bests[key] = safeScore;
+  try {
+    localStorage.setItem(DAILY_BESTS_KEY, JSON.stringify(bests));
+  } catch {
+    // Ignore storage quota errors.
+  }
+  return safeScore;
+}
+
+function comboMultiplierForCount(count) {
+  if (count >= COMBO_STEP3_COUNT) return 3;
+  if (count >= COMBO_STEP2_COUNT) return 2;
+  return 1;
+}
+
+function clearComboState() {
+  comboCount = 0;
+  comboMultiplier = 1;
+  comboExpiresAt = 0;
+}
+
+function isSlowPowerupActive(now = Date.now()) {
+  return slowPowerupUntil > now;
+}
+
+function isMagnetPowerupActive(now = Date.now()) {
+  return magnetPowerupUntil > now;
+}
+
+function isPowerupFoodAllowed() {
+  return !isDuelSelected() && !isRageMode() && !rageTreatActive;
+}
+
+function powerupLabel(type) {
+  if (type === "slow") return "SL";
+  if (type === "shield") return "SH";
+  if (type === "magnet") return "MG";
+  return "";
+}
+
+function pickFoodPowerupType() {
+  if (!isPowerupFoodAllowed()) return "";
+  if ((state.rngSeed % 100) >= POWERUP_SPAWN_CHANCE_PCT) return "";
+  const types = ["slow", "shield", "magnet"];
+  return types[(state.rngSeed >>> 8) % types.length];
+}
+
+function applyPowerupEffect(type, now = Date.now()) {
+  if (type === "slow") {
+    slowPowerupUntil = Math.max(slowPowerupUntil, now + POWERUP_SLOW_MS);
+    return;
+  }
+  if (type === "magnet") {
+    magnetPowerupUntil = Math.max(magnetPowerupUntil, now + POWERUP_MAGNET_MS);
+    return;
+  }
+  if (type === "shield") {
+    shieldCharges += 1;
+  }
+}
+
+function maybePullFoodTowardHead() {
+  if (!isMagnetPowerupActive() || !state.food || !state.snake?.length) return;
+  if (!isPowerupFoodAllowed()) return;
+  const head = state.snake[0];
+  const dist = wrappedDistance(state.food, head, state.gridSize);
+  if (dist <= 0 || dist > POWERUP_MAGNET_RADIUS) return;
+
+  const dx = wrappedAxisDelta(state.food.x, head.x, state.gridSize);
+  const dy = wrappedAxisDelta(state.food.y, head.y, state.gridSize);
+  const primaryX = Math.abs(dx) >= Math.abs(dy);
+  const steps = primaryX
+    ? [{ dx: Math.sign(dx), dy: 0 }, { dx: 0, dy: Math.sign(dy) }]
+    : [{ dx: 0, dy: Math.sign(dy) }, { dx: Math.sign(dx), dy: 0 }];
+
+  for (const step of steps) {
+    if (!step.dx && !step.dy) continue;
+    const candidate = {
+      x: wrapCoord(state.food.x + step.dx, state.gridSize),
+      y: wrapCoord(state.food.y + step.dy, state.gridSize),
+    };
+    if (isSnakeCell(candidate) && !sameCell(candidate, head)) continue;
+    state = { ...state, food: candidate };
+    return;
+  }
+}
+
+function updateComboAndPowerupState(now = Date.now()) {
+  if (comboExpiresAt > 0 && now > comboExpiresAt) {
+    clearComboState();
+  }
+  if (slowPowerupUntil > 0 && now > slowPowerupUntil) {
+    slowPowerupUntil = 0;
+  }
+  if (magnetPowerupUntil > 0 && now > magnetPowerupUntil) {
+    magnetPowerupUntil = 0;
+  }
+}
+
+function updateComboIndicator(now = Date.now()) {
+  if (!comboIndicator || !comboTextEl || !comboMetaEl) return;
+  if (!gameStarted || !state.alive || isDuelRoundActive()) {
+    comboIndicator.hidden = true;
+    return;
+  }
+
+  const parts = [];
+  if (comboMultiplier > 1 && comboExpiresAt > now) {
+    comboTextEl.textContent = `COMBO x${comboMultiplier}`;
+    parts.push(`${Math.max(0, (comboExpiresAt - now) / 1000).toFixed(1)}s`);
+  } else {
+    comboTextEl.textContent = "BOOSTS";
+  }
+  if (isSlowPowerupActive(now)) {
+    parts.push(`SL ${((slowPowerupUntil - now) / 1000).toFixed(1)}s`);
+  }
+  if (isMagnetPowerupActive(now)) {
+    parts.push(`MG ${((magnetPowerupUntil - now) / 1000).toFixed(1)}s`);
+  }
+  if (shieldCharges > 0) {
+    parts.push(`SH x${shieldCharges}`);
+  }
+
+  comboMetaEl.textContent = parts.join(" | ");
+  comboIndicator.hidden = parts.length === 0;
+}
+
 function isDuelRoundActive() {
   return duel.activeRound;
 }
@@ -352,6 +547,7 @@ function isDuelReadyToStart() {
 
 function updateModeButtons() {
   if (modeSingleButton) modeSingleButton.classList.toggle("active", selectedMode === "single");
+  if (modeDailyButton) modeDailyButton.classList.toggle("active", selectedMode === "daily");
   if (modeDuelButton) modeDuelButton.classList.toggle("active", selectedMode === "duel");
   if (duelPanel) duelPanel.hidden = selectedMode !== "duel";
   if (nameEntry && selectedMode === "duel") nameEntry.hidden = true;
@@ -360,6 +556,10 @@ function updateModeButtons() {
   if (selectedMode === "single") {
     top5Title.textContent = "Top 5 Global";
     if (menuHighscoreList?.parentElement) menuHighscoreList.parentElement.hidden = false;
+  } else if (selectedMode === "daily") {
+    top5Title.textContent = "Daily Challenge";
+    if (menuHighscoreList?.parentElement) menuHighscoreList.parentElement.hidden = true;
+    startGameButton.textContent = "Start Daily Challenge";
   } else {
     startGameButton.textContent = isDuelReadyToStart() ? "Start 1v1" : "Waiting for Opponent";
     top5Title.textContent = "Top 5 Global";
@@ -373,14 +573,17 @@ function updateModeButtons() {
 }
 
 function applySelectedMode(mode) {
-  const next = mode === "duel" ? "duel" : "single";
+  const next = mode === "duel" ? "duel" : mode === "daily" ? "daily" : "single";
   if (selectedMode === next) {
     updateModeButtons();
     return;
   }
   selectedMode = next;
-  if (selectedMode === "single") {
+  if (selectedMode !== "duel") {
     stopDuelSession({ keepMode: true });
+  }
+  if (selectedMode !== "daily") {
+    dailyLastResult = null;
   }
   updateModeButtons();
 }
@@ -2089,6 +2292,28 @@ function drawGrid() {
     ctx.restore();
   };
 
+  const drawPowerupBadgeAt = (cell, type) => {
+    if (!type) return;
+    const cx = cell.x * size + size * 0.77;
+    const cy = cell.y * size + size * 0.26;
+    const r = size * 0.24;
+    const bg = type === "slow" ? "#44b3ff" : type === "shield" ? "#68c56d" : "#cc77ff";
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, size * 0.05);
+    ctx.strokeStyle = "rgba(27, 18, 10, 0.55)";
+    ctx.stroke();
+    ctx.fillStyle = "#fff9e8";
+    ctx.font = `${Math.max(8, Math.floor(size * 0.16))}px "SF Pro Text", Arial, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(powerupLabel(type), cx, cy + 0.5);
+    ctx.restore();
+  };
+
   const foodKey = `${state.food.x},${state.food.y}`;
   if (foodKey !== lastFoodKey) {
     lastFoodKey = foodKey;
@@ -2121,6 +2346,9 @@ function drawGrid() {
     );
   } else {
     drawFallbackCell(state.food, "#f97316");
+  }
+  if (!rageStyleTreat && !(rageTreatActive && !rageTreatReady)) {
+    drawPowerupBadgeAt(state.food, activeFoodPowerup);
   }
 
   if (rageTreatActive && !rageTreatReady && rageRunner) {
@@ -2383,12 +2611,17 @@ function tick() {
   }
 
   updateRageState();
+  updateComboAndPowerupState();
   if (paused || !state.alive || !gameStarted) {
+    updateComboIndicator();
     drawGrid();
     return;
   }
+  maybePullFoodTowardHead();
   const wasAlive = state.alive;
+  const stateBeforeStep = state;
   const prevScore = state.score;
+  const consumedPowerup = activeFoodPowerup;
   const ateRageTreat = rageTreatActive && rageTreatReady;
   if (rageTreatActive && !rageTreatReady) {
     const visibleFood = state.food;
@@ -2398,15 +2631,32 @@ function tick() {
   } else {
     state = stepGame(state);
   }
+  if (wasAlive && !state.alive && shieldCharges > 0) {
+    shieldCharges -= 1;
+    state = { ...stateBeforeStep, alive: true };
+    clearComboState();
+    updateComboIndicator();
+    drawGrid();
+    return;
+  }
   advanceBodyWalkFrame();
   const gained = state.score - prevScore;
-  if (gained > 0 && ateRageTreat && gained < 2) {
-    state = { ...state, score: state.score + (2 - gained) };
-  } else if (gained > 0 && isRageMode() && gained < 2) {
-    state = { ...state, score: state.score + (2 - gained) };
+  const ateFood = gained > 0;
+  if (ateFood) {
+    const now = Date.now();
+    comboCount = comboExpiresAt > now ? comboCount + 1 : 1;
+    comboMultiplier = comboMultiplierForCount(comboCount);
+    comboExpiresAt = now + COMBO_WINDOW_MS;
+    const basePoints = ateRageTreat || isRageMode() ? 2 : 1;
+    const awarded = basePoints * comboMultiplier;
+    state = { ...state, score: prevScore + awarded };
+    if (consumedPowerup) {
+      applyPowerupEffect(consumedPowerup, now);
+    }
+    activeFoodPowerup = "";
   }
   updateScore();
-  if (state.score !== prevScore) {
+  if (ateFood) {
     if (!ateRageTreat && !activeChaser) {
       treatsSinceChaser += 1;
       if (chaserRecoveryTreatsRemaining > 0) {
@@ -2421,13 +2671,22 @@ function tick() {
     assignFoodStyle();
     maybeSpawnChaser();
   }
+  const stateBeforeChaserStep = state;
   updateChaserState();
+  if (stateBeforeChaserStep.alive && !state.alive && shieldCharges > 0) {
+    shieldCharges -= 1;
+    state = { ...stateBeforeChaserStep, alive: true };
+    clearComboState();
+  }
   if (wasAlive && !state.alive) {
     clearActiveChaser();
     hideChaserAlert();
+    clearComboState();
+    updateComboIndicator();
     handleGameOver(state.score);
     openMenu("gameover");
   }
+  updateComboIndicator();
   drawGrid();
 }
 
@@ -2436,6 +2695,7 @@ function getTickMs() {
   const growth = Math.max(0, state.snake.length - 3);
   let ramp = Math.max(95, base - growth * 1.4);
   if (isRageMode()) ramp -= RAGE_SPEED_BONUS_MS;
+  if (isSlowPowerupActive()) ramp += POWERUP_SLOW_TICK_BONUS_MS;
   return Math.max(55, Math.round(ramp));
 }
 
@@ -2513,6 +2773,12 @@ function resetGame(options = {}) {
     };
   }
   state = { ...state, pointsPerFood: duelMode ? 0 : 1 };
+  activeFoodPowerup = "";
+  clearComboState();
+  slowPowerupUntil = 0;
+  magnetPowerupUntil = 0;
+  shieldCharges = 0;
+  dailyLastResult = null;
   treatsSinceRage = 0;
   treatsSinceChaser = 0;
   chaserRecoveryTreatsRemaining = 0;
@@ -2546,6 +2812,7 @@ function resetGame(options = {}) {
   if (!duelMode) {
     updateOpponentScore(0);
   }
+  updateComboIndicator();
   drawGrid();
 }
 
@@ -2730,6 +2997,20 @@ function handleGameOver(score) {
     renderHighscores();
     return;
   }
+  if (isDailySelected()) {
+    pendingHighscore = null;
+    pendingHighscoreName = "";
+    hidePendingNameEntry();
+    const bestBefore = getDailyBestScore();
+    const nextBest = storeDailyBestScore(score);
+    dailyLastResult = {
+      score: Math.max(0, Math.floor(Number(score) || 0)),
+      best: nextBest,
+      isNew: nextBest > bestBefore,
+    };
+    renderHighscores();
+    return;
+  }
   if (isTopFiveScore(score)) {
     pendingHighscore = recordHighscore(score, getStoredName());
     showPendingNameEntry();
@@ -2777,33 +3058,55 @@ function openMenu(mode) {
   }
 
   renderHighscores();
-  if (!(mode === "gameover" && pendingHighscore)) {
+  if (!isDailySelected() && !(mode === "gameover" && pendingHighscore)) {
     void refreshHighscoresFromServer();
   }
   if (mode === "gameover") {
-    menuTitle.textContent = "Game Over";
-    if (!pendingHighscore) {
-      menuText.textContent = `Score: ${state.score}. Press Play Again.`;
-      startGameButton.textContent = "Play Again";
+    if (isDailySelected()) {
+      menuTitle.textContent = "Daily Challenge";
+      const result = dailyLastResult || {
+        score: Math.max(0, Math.floor(Number(state.score) || 0)),
+        best: getDailyBestScore(),
+        isNew: false,
+      };
+      const suffix = result.isNew ? " New daily best!" : "";
+      menuText.textContent = `Score: ${result.score}. Daily best: ${result.best}.${suffix}`;
       pendingHighscoreName = "";
       hidePendingNameEntry();
     } else {
-      menuText.textContent = `Score: ${state.score}.`;
-      startGameButton.textContent = "Save Score & Play Again";
-      showPendingNameEntry();
-      const inlineInput = menuHighscoreList.querySelector(".score-name-input");
-      if (inlineInput) {
-        inlineInput.focus();
-        inlineInput.select();
+      menuTitle.textContent = "Game Over";
+      if (!pendingHighscore) {
+        menuText.textContent = `Score: ${state.score}. Press Play Again.`;
+        startGameButton.textContent = "Play Again";
+        pendingHighscoreName = "";
+        hidePendingNameEntry();
+      } else {
+        menuText.textContent = `Score: ${state.score}.`;
+        startGameButton.textContent = "Save Score & Play Again";
+        showPendingNameEntry();
+        const inlineInput = menuHighscoreList.querySelector(".score-name-input");
+        if (inlineInput) {
+          inlineInput.focus();
+          inlineInput.select();
+        }
       }
     }
   } else {
     pendingHighscore = null;
     pendingHighscoreName = "";
     hidePendingNameEntry();
-    menuTitle.textContent = "Lulu-Snake";
-    menuText.textContent = "Press Start to begin.";
-    startGameButton.textContent = "Start Game";
+    if (isDailySelected()) {
+      menuTitle.textContent = "Daily Challenge";
+      const todayBest = getDailyBestScore();
+      menuText.textContent = todayBest > 0
+        ? `Same daily seed for everyone. Today best: ${todayBest}.`
+        : "Same daily seed for everyone. Set the first daily best.";
+      startGameButton.textContent = "Start Daily Challenge";
+    } else {
+      menuTitle.textContent = "Lulu-Snake";
+      menuText.textContent = "Press Start to begin.";
+      startGameButton.textContent = "Start Game";
+    }
   }
   updateModeButtons();
 }
@@ -2967,10 +3270,11 @@ startGameButton.addEventListener("click", () => {
     startDuelRoundAsHost();
     return;
   }
-  if (pendingHighscore?.id) {
+  if (!isDailySelected() && pendingHighscore?.id) {
     submitPendingHighscoreName();
   }
-  resetGame();
+  const seed = isDailySelected() ? getDailyChallengeSeed() : Date.now();
+  resetGame({ seed });
 });
 
 saveScoreButton.addEventListener("click", () => {
@@ -2987,6 +3291,13 @@ nameEntryInput.addEventListener("keydown", (event) => {
 if (modeSingleButton) {
   modeSingleButton.addEventListener("click", () => {
     applySelectedMode("single");
+    openMenu("start");
+  });
+}
+
+if (modeDailyButton) {
+  modeDailyButton.addEventListener("click", () => {
+    applySelectedMode("daily");
     openMenu("start");
   });
 }
@@ -3092,6 +3403,10 @@ function assignFoodStyle() {
   if (images.treats.length > 0) {
     currentTreatIndex = state.rngSeed % images.treats.length;
   }
+  activeFoodPowerup = "";
+  if (isDuelSelected()) {
+    return;
+  }
   if (isRageMode()) {
     rageTreatActive = false;
     rageTreatReady = false;
@@ -3105,6 +3420,7 @@ function assignFoodStyle() {
     rageTreatActive = false;
     rageTreatReady = false;
     rageRunner = null;
+    activeFoodPowerup = pickFoodPowerupType();
   }
 }
 

@@ -1,6 +1,6 @@
 # Lulu-Snake
 
-Classic Snake with a dog-themed visual style, Lulu-Rage mode, music, and a global Top 5 highscore list.
+Classic Snake with a dog-themed visual style, Lulu-Rage mode, music, Daily Challenge, combo boosts, power-ups, and a global Top 5 highscore list.
 
 ## Run Locally
 
@@ -22,13 +22,19 @@ Then open:
 - `Space`: pause/resume
 - `R`: restart
 - `Speaker` button toggles music (`🔊` on, `🔇` muted)
-- Menu mode switch: `Single Player` or `1v1 Online`
+- Menu mode switch: `Single Player`, `Daily Challenge`, or `1v1 Online`
 
 ## Gameplay Notes
 
 - Walls are wrap-around (no wall collisions).
 - Single game mode: no difficulty selector.
+- Daily Challenge mode uses one shared seed per UTC day and tracks your local best for that day.
 - Start speed is noticeably slower, then increases gradually as snake length grows.
+- Combo system: eat quickly within `2.6s` windows to scale score multipliers (`x2` from 3-chain, `x3` from 6-chain).
+- Treat power-ups can spawn with badges:
+  - `SL` (Slow Time): temporarily slows game tick speed.
+  - `SH` (Shield): prevents one death (collision/chaser), then consumes one charge.
+  - `MG` (Magnet): pulls nearby treats toward the snake head.
 - Snake body uses the 4 `snake-body-walk-*` frames for the full body animation (when available).
 - Body rendering now draws one oriented sprite per snake segment (instead of texture-stroked lines) for cleaner continuity in turns and wraps.
 - A shared trim box is applied across walk frames to keep frame alignment stable.
